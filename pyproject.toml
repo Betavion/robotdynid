@@ -12,6 +12,18 @@ license = {text = "MIT"}
 authors = [
   {name = "Betavion"}
 ]
+keywords = ["robotics", "dynamics", "identification", "urdf", "pinocchio", "symbolic"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Mathematics",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
   "numpy>=2.3,<2.7",
   "scipy>=1.17",
@@ -20,6 +32,14 @@ dependencies = [
   "pandas>=3.0",
   "matplotlib>=3.10"
 ]
+
+[project.urls]
+Homepage = "https://github.com/Betavion/robotdynid"
+Repository = "https://github.com/Betavion/robotdynid"
+Issues = "https://github.com/Betavion/robotdynid/issues"
+
+[project.optional-dependencies]
+dev = []
 
 [tool.setuptools]
 include-package-data = true

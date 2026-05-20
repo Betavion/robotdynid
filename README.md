@@ -17,17 +17,24 @@
 
 The library focuses on **serial open-chain robots**.
 
-## Install
+## Installation
+
+Install from a local checkout:
 
 ```bash
-python -m venv --without-pip .venv
-./scripts/bootstrap_venv.sh
+pip install .
 ```
 
-Or install directly:
+Install in editable mode for development:
 
 ```bash
 pip install -e .
+```
+
+Install directly from GitHub:
+
+```bash
+pip install git+https://github.com/Betavion/robotdynid.git
 ```
 
 ## Main API
@@ -39,6 +46,14 @@ Typical entrypoints:
 - `robotdynid.numeric.build_pinocchio_regressor_evaluator`
 - `robotdynid.workflow.run_identification_workflow`
 - `robotdynid.codegen.generate_base_regressor_c_function`
+
+## Development
+
+Run the test suite with:
+
+```bash
+python -m unittest
+```
 
 ## License
 
