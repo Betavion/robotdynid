@@ -65,9 +65,14 @@ class CodegenTests(unittest.TestCase):
 
         standard_bundle = build_standard_regressor(
             robot,
-            SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv", "fc"), include_qds=True),
+            SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv", "fc"), include_stribeck_parameters=True),
         )
-        zero_subs = {**{q: 0.1 for q in standard_bundle.context.q}, **{qd: 0.2 for qd in standard_bundle.context.qd}, **{qdd: 0.3 for qdd in standard_bundle.context.qdd}, **{qds: 0.4 for qds in standard_bundle.context.qds}}
+        zero_subs = {
+            **{q: 0.1 for q in standard_bundle.context.q},
+            **{qd: 0.2 for qd in standard_bundle.context.qd},
+            **{qdd: 0.3 for qdd in standard_bundle.context.qdd},
+            **{param: 0.4 for param in standard_bundle.context.stribeck_parameters},
+        }
         standard_count = len(standard_bundle.context.standard_params)
         numeric_regressor = standard_bundle.regressor[:, :standard_count].subs(zero_subs)
         metadata = select_base_parameters(
@@ -85,14 +90,14 @@ class CodegenTests(unittest.TestCase):
         self.assertIn("void fill_H_bip_base", generated.definition)
         self.assertIn("double *H", generated.definition)
         self.assertIn("H[0] =", generated.definition)
-        self.assertNotIn("theta_lin", generated_source)
+        self.assertNotIn("linear_parameters", generated_source)
 
     def test_generate_prediction_c_function(self) -> None:
         bundle = self._build_base_bundle()
         generated = generate_prediction_c_function(bundle)
         self.assertEqual(generated.language, "c")
         self.assertIn("void predict_tau", generated.definition)
-        self.assertIn("const double *theta_lin", generated.definition)
+        self.assertIn("const double *linear_parameters", generated.definition)
         self.assertIn("tau[0] =", generated.definition)
 
     def test_generate_prediction_c_function_single_parameter(self) -> None:
@@ -124,13 +129,13 @@ class CodegenTests(unittest.TestCase):
 
         standard_bundle = build_standard_regressor(
             robot,
-            SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv",), include_qds=True),
+            SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv",), include_stribeck_parameters=True),
         )
         zero_subs = {
             standard_bundle.context.q[0]: 0.2,
             standard_bundle.context.qd[0]: 0.3,
             standard_bundle.context.qdd[0]: 0.4,
-            standard_bundle.context.qds[0]: 0.5,
+            standard_bundle.context.stribeck_parameters[0]: 0.5,
         }
         standard_count = len(standard_bundle.context.standard_params)
         numeric_regressor = standard_bundle.regressor[:, :standard_count].subs(zero_subs)
@@ -160,18 +165,18 @@ class CodegenTests(unittest.TestCase):
             self.assertTrue(
                 "SiaKernel::ComputeProgramBlock0" in helper_source or "SiaKernel::ComputeBlock0" in helper_source
             )
-            self.assertNotIn("theta_lin", helper_source + generated_h.definition)
+            self.assertNotIn("linear_parameters", helper_source + generated_h.definition)
         self.assertIn("SiaKernel::PredictTau", generated_tau.definition)
 
-    def test_fixed_qds_specializes_generated_expressions(self) -> None:
+    def test_fixed_stribeck_parameters_specializes_generated_expressions(self) -> None:
         bundle = self._build_base_bundle()
         generated = generate_prediction_c_function(
             bundle,
-            config=CodegenConfig(language="c", fixed_qds=(0.25, 0.5)),
+            config=CodegenConfig(language="c", fixed_stribeck_parameters=(0.25, 0.5)),
         )
         generated_source = "\n".join(generated.helper_definitions + (generated.definition,))
-        self.assertNotIn("qds[0]", generated_source)
-        self.assertNotIn("qds[1]", generated_source)
+        self.assertNotIn("stribeck_parameters[0]", generated_source)
+        self.assertNotIn("stribeck_parameters[1]", generated_source)
 
     def test_export_cpp_artifacts(self) -> None:
         bundle = self._build_base_bundle()

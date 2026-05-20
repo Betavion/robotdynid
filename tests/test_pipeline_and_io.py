@@ -120,8 +120,8 @@ class PipelineAndIoTests(unittest.TestCase):
             pipeline = build_base_identification_pipeline(
                 robot,
                 selection_dataset,
-                selection_qds=np.array([0.4, 0.5], dtype=float),
-                symbolic_options=SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv", "fc"), include_qds=True),
+                selection_stribeck_parameters=np.array([0.4, 0.5], dtype=float),
+                symbolic_options=SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv", "fc"), include_stribeck_parameters=True),
             )
 
             self.assertGreaterEqual(pipeline.base_metadata.rank, 1)

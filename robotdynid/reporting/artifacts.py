@@ -32,11 +32,14 @@ def build_result_payload(
         "selection_sample_count": selection_dataset.sample_count,
         "selection_source": selection_source,
         "base_rank": base_metadata.rank,
-        "qds": identification_result.qds.tolist(),
-        "theta_lin": identification_result.theta_lin.tolist(),
+        "linear_parameters": identification_result.linear_parameters.tolist(),
+        "stribeck_parameters": identification_result.stribeck_parameters.tolist(),
         "objective_history": list(identification_result.objective_history),
         "rmse_history": [rmse.tolist() for rmse in identification_result.rmse_history],
         "linear_parameter_names": list(identification_result.linear_parameter_names),
+        "stribeck_parameter_names": [
+            f"stribeck{index + 1}" for index in range(identification_result.stribeck_parameters.shape[0])
+        ],
         "stride": stride,
         "max_samples": max_samples,
         "chunk_size": chunk_size,
@@ -55,10 +58,18 @@ def save_identification_artifacts(
     (output_path / "identify_result.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     base_metadata.to_json_file(output_path / "base_metadata.json")
 
-    theta_names = payload["linear_parameter_names"]  # type: ignore[index]
-    theta_values = payload["theta_lin"]  # type: ignore[index]
-    theta_lines = ["name,value"] + [f"{name},{value}" for name, value in zip(theta_names, theta_values)]
-    (output_path / "theta_lin.csv").write_text("\n".join(theta_lines) + "\n", encoding="utf-8")
+    linear_names = payload["linear_parameter_names"]  # type: ignore[index]
+    linear_values = payload["linear_parameters"]  # type: ignore[index]
+    linear_lines = ["name,value"] + [f"{name},{value}" for name, value in zip(linear_names, linear_values)]
+    (output_path / "identified_linear_parameters.csv").write_text("\n".join(linear_lines) + "\n", encoding="utf-8")
 
-    qds_lines = ["name,qds"] + [f"qds{index + 1},{value}" for index, value in enumerate(payload["qds"])]  # type: ignore[index]
-    (output_path / "qds_star.csv").write_text("\n".join(qds_lines) + "\n", encoding="utf-8")
+    stribeck_names = payload["stribeck_parameter_names"]  # type: ignore[index]
+    stribeck_values = payload["stribeck_parameters"]  # type: ignore[index]
+    stribeck_lines = [
+        "name,value",
+        *[f"{name},{value}" for name, value in zip(stribeck_names, stribeck_values)],
+    ]
+    (output_path / "identified_stribeck_parameters.csv").write_text(
+        "\n".join(stribeck_lines) + "\n",
+        encoding="utf-8",
+    )

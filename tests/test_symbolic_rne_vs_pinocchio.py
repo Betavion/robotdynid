@@ -60,7 +60,7 @@ class SymbolicRneVsPinocchioTests(unittest.TestCase):
         robot, pin_bundle = self._load_models()
         bundle = build_standard_regressor(
             robot,
-            SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_qds=False),
+            SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_stribeck_parameters=False),
         )
 
         q = np.array([0.3, -0.2], dtype=float)

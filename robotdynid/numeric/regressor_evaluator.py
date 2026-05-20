@@ -24,7 +24,7 @@ def _as_vector(values: np.ndarray, size: int, name: str) -> np.ndarray:
 def _joint_dynamics_block(
     qd: np.ndarray,
     qdd: np.ndarray,
-    qds: np.ndarray | None,
+    stribeck_parameters: np.ndarray | None,
     enabled_groups: tuple[str, ...],
 ) -> np.ndarray:
     dof = qd.shape[0]
@@ -49,12 +49,12 @@ def _joint_dynamics_block(
             columns.append(column)
 
     if "fd" in enabled_groups:
-        if qds is None:
-            raise ValueError("qds must be provided when the fd group is enabled.")
+        if stribeck_parameters is None:
+            raise ValueError("stribeck_parameters must be provided when the fd group is enabled.")
         for index in range(dof):
             column = np.zeros((dof,), dtype=float)
             velocity = qd[index]
-            column[index] = np.sign(velocity) * np.exp(-abs(velocity / qds[index]))
+            column[index] = np.sign(velocity) * np.exp(-abs(velocity / stribeck_parameters[index]))
             columns.append(column)
 
     if "fo" in enabled_groups:
@@ -72,7 +72,7 @@ class PinocchioRegressorEvaluator:
 
     pinocchio_bundle: PinocchioModelBundle
     dof: int
-    qds_size: int
+    stribeck_parameter_size: int
     inertial_parameter_names: tuple[str, ...]
     joint_dynamics_parameter_names: tuple[str, ...]
     linear_parameter_names: tuple[str, ...]
@@ -84,12 +84,16 @@ class PinocchioRegressorEvaluator:
         q: np.ndarray,
         qd: np.ndarray,
         qdd: np.ndarray,
-        qds: np.ndarray | None = None,
+        stribeck_parameters: np.ndarray | None = None,
     ) -> np.ndarray:
         q_arr = _as_vector(q, self.dof, "q")
         qd_arr = _as_vector(qd, self.dof, "qd")
         qdd_arr = _as_vector(qdd, self.dof, "qdd")
-        qds_arr = _as_vector(qds, self.qds_size, "qds") if self.qds_size > 0 else None
+        stribeck_arr = (
+            _as_vector(stribeck_parameters, self.stribeck_parameter_size, "stribeck_parameters")
+            if self.stribeck_parameter_size > 0
+            else None
+        )
 
         inertial = compute_joint_torque_regressor(
             self.pinocchio_bundle,
@@ -104,7 +108,7 @@ class PinocchioRegressorEvaluator:
         joint_dynamics = _joint_dynamics_block(
             qd=qd_arr,
             qdd=qdd_arr,
-            qds=qds_arr,
+            stribeck_parameters=stribeck_arr,
             enabled_groups=self.enabled_joint_dynamics_groups,
         )
         return np.hstack([inertial, joint_dynamics]) if joint_dynamics.shape[1] > 0 else inertial
@@ -114,12 +118,12 @@ class PinocchioRegressorEvaluator:
         q: np.ndarray,
         qd: np.ndarray,
         qdd: np.ndarray,
-        theta_lin: np.ndarray,
-        qds: np.ndarray | None = None,
+        linear_parameters: np.ndarray,
+        stribeck_parameters: np.ndarray | None = None,
     ) -> np.ndarray:
-        regressor = self.evaluate_regressor(q, qd, qdd, qds=qds)
-        theta = _as_vector(theta_lin, len(self.linear_parameter_names), "theta_lin")
-        return regressor @ theta
+        regressor = self.evaluate_regressor(q, qd, qdd, stribeck_parameters=stribeck_parameters)
+        parameters = _as_vector(linear_parameters, len(self.linear_parameter_names), "linear_parameters")
+        return regressor @ parameters
 
 
 def build_pinocchio_regressor_evaluator(
@@ -140,11 +144,11 @@ def build_pinocchio_regressor_evaluator(
             enabled_groups=enabled_joint_dynamics_groups,
         )
     )
-    qds_size = dof if "fd" in enabled_joint_dynamics_groups else 0
+    stribeck_parameter_size = dof if "fd" in enabled_joint_dynamics_groups else 0
     return PinocchioRegressorEvaluator(
         pinocchio_bundle=pinocchio_bundle,
         dof=dof,
-        qds_size=qds_size,
+        stribeck_parameter_size=stribeck_parameter_size,
         inertial_parameter_names=inertial_names,
         joint_dynamics_parameter_names=joint_dynamics_names,
         linear_parameter_names=inertial_names + joint_dynamics_names,

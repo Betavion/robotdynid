@@ -28,10 +28,14 @@ def _symbol_to_reference(symbol: sp.Symbol, bundle: BaseRegressorBundle, temp_in
     q_names = {str(sym): f"q[{idx}]" for idx, sym in enumerate(bundle.context.q)}
     qd_names = {str(sym): f"qd[{idx}]" for idx, sym in enumerate(bundle.context.qd)}
     qdd_names = {str(sym): f"qdd[{idx}]" for idx, sym in enumerate(bundle.context.qdd)}
-    qds_names = {str(sym): f"qds[{idx}]" for idx, sym in enumerate(bundle.context.qds)}
-    theta_names = {param_name: f"theta_lin[{idx}]" for idx, param_name in enumerate(bundle.linear_parameter_names)}
+    stribeck_names = {
+        str(sym): f"stribeck_parameters[{idx}]" for idx, sym in enumerate(bundle.context.stribeck_parameters)
+    }
+    parameter_names = {
+        param_name: f"linear_parameters[{idx}]" for idx, param_name in enumerate(bundle.linear_parameter_names)
+    }
 
-    for mapping in (q_names, qd_names, qdd_names, qds_names, theta_names):
+    for mapping in (q_names, qd_names, qdd_names, stribeck_names, parameter_names):
         if name in mapping:
             return mapping[name]
     return name
@@ -55,11 +59,14 @@ def _header_guard(stem: str, language: str) -> str:
 
 
 def _c_signature(spec: CFunctionSpec) -> str:
-    if spec.argument_names == ("q", "qd", "qdd", "qds"):
-        return f"void {spec.name}(double *{spec.output_name}, const double *q, const double *qd, const double *qdd, const double *qds)"
+    if spec.argument_names == ("q", "qd", "qdd", "stribeck_parameters"):
+        return (
+            f"void {spec.name}(double *{spec.output_name}, const double *q, const double *qd, "
+            "const double *qdd, const double *stribeck_parameters)"
+        )
     return (
         f"void {spec.name}(double *{spec.output_name}, const double *q, const double *qd, "
-        "const double *qdd, const double *qds, const double *theta_lin)"
+        "const double *qdd, const double *stribeck_parameters, const double *linear_parameters)"
     )
 
 
@@ -68,16 +75,22 @@ def _cpp_method_name(spec: CFunctionSpec) -> str:
 
 
 def _helper_parameters(spec: CFunctionSpec) -> str:
-    parameters = ["double *tmp", "const double *q", "const double *qd", "const double *qdd", "const double *qds"]
-    if "theta_lin" in spec.argument_names:
-        parameters.append("const double *theta_lin")
+    parameters = [
+        "double *tmp",
+        "const double *q",
+        "const double *qd",
+        "const double *qdd",
+        "const double *stribeck_parameters",
+    ]
+    if "linear_parameters" in spec.argument_names:
+        parameters.append("const double *linear_parameters")
     return ", ".join(parameters)
 
 
 def _helper_arguments(spec: CFunctionSpec) -> str:
-    arguments = ["tmp", "q", "qd", "qdd", "qds"]
-    if "theta_lin" in spec.argument_names:
-        arguments.append("theta_lin")
+    arguments = ["tmp", "q", "qd", "qdd", "stribeck_parameters"]
+    if "linear_parameters" in spec.argument_names:
+        arguments.append("linear_parameters")
     return ", ".join(arguments)
 
 
@@ -86,11 +99,11 @@ def _cpp_declaration(spec: CFunctionSpec, config: CodegenConfig) -> str:
     if spec.output_name == "H":
         return (
             f"static void {method_name}(double *{spec.output_name}, const double *q, const double *qd, "
-            "const double *qdd, const double *qds)"
+            "const double *qdd, const double *stribeck_parameters)"
         )
     return (
         f"static void {method_name}(double *{spec.output_name}, const double *q, const double *qd, "
-        "const double *qdd, const double *qds, const double *theta_lin)"
+        "const double *qdd, const double *stribeck_parameters, const double *linear_parameters)"
     )
 
 
@@ -275,18 +288,18 @@ def _emit_main_body(
     return lines
 
 
-def _apply_fixed_qds(
+def _apply_fixed_stribeck_parameters(
     expressions: list[sp.Expr],
     bundle: BaseRegressorBundle,
     config: CodegenConfig,
 ) -> list[sp.Expr]:
-    if config.fixed_qds is None:
+    if config.fixed_stribeck_parameters is None:
         return expressions
-    if len(config.fixed_qds) != len(bundle.context.qds):
-        raise ValueError(f"fixed_qds must have length {len(bundle.context.qds)}.")
+    if len(config.fixed_stribeck_parameters) != len(bundle.context.stribeck_parameters):
+        raise ValueError(f"fixed_stribeck_parameters must have length {len(bundle.context.stribeck_parameters)}.")
     substitutions = {
         symbol: sp.Float(value)
-        for symbol, value in zip(bundle.context.qds, config.fixed_qds)
+        for symbol, value in zip(bundle.context.stribeck_parameters, config.fixed_stribeck_parameters)
     }
     return [sp.sympify(expr).xreplace(substitutions) for expr in expressions]
 
@@ -298,7 +311,7 @@ def _build_generated_function(
     config: CodegenConfig,
 ) -> CGeneratedCode:
     language = _validate_language(config.language)
-    output_expressions = _apply_fixed_qds(output_expressions, bundle, config)
+    output_expressions = _apply_fixed_stribeck_parameters(output_expressions, bundle, config)
     cse_output = apply_cse(output_expressions, symbol_prefix="aux")
     program_inputs = [expr for _, expr in cse_output.temporaries] + list(cse_output.reduced_expressions)
     program_blocks = list(enumerate(bundle.program.required_blocks(program_inputs)))
@@ -372,12 +385,12 @@ def generate_base_regressor_c_function(
     function_name: str = "fill_H_bip_base",
     config: CodegenConfig = CodegenConfig(language="c"),
 ) -> CGeneratedCode:
-    """Generate a row-major H(q, qd, qdd, qds) filling function."""
+    """Generate a row-major H(q, qd, qdd, stribeck_parameters) filling function."""
     spec = CFunctionSpec(
         name=function_name,
         output_name="H",
-        argument_names=("q", "qd", "qdd", "qds"),
-        docstring="Fill the row-major base regressor H(q, qd, qdd, qds).",
+        argument_names=("q", "qd", "qdd", "stribeck_parameters"),
+        docstring="Fill the row-major base regressor H(q, qd, qdd, stribeck_parameters).",
     )
     flattened = _flatten_row_major(bundle.regressor_program)
     return _build_generated_function(bundle, spec, flattened, config)
@@ -389,15 +402,15 @@ def generate_prediction_c_function(
     function_name: str = "predict_tau",
     config: CodegenConfig = CodegenConfig(language="c"),
 ) -> CGeneratedCode:
-    """Generate tau(q, qd, qdd, qds, theta_lin) directly from the base regressor."""
+    """Generate tau(q, qd, qdd, stribeck_parameters, linear_parameters) directly from the base regressor."""
     linear_symbols = sp.symbols(" ".join(bundle.linear_parameter_names), real=True)
     linear_symbols = linear_symbols if isinstance(linear_symbols, tuple) else (linear_symbols,)
     tau_expr = bundle.regressor_program * sp.Matrix(linear_symbols)
     spec = CFunctionSpec(
         name=function_name,
         output_name="tau",
-        argument_names=("q", "qd", "qdd", "qds", "theta_lin"),
-        docstring="Predict tau directly from q, qd, qdd, qds and theta_lin.",
+        argument_names=("q", "qd", "qdd", "stribeck_parameters", "linear_parameters"),
+        docstring="Predict tau directly from q, qd, qdd, stribeck_parameters and linear_parameters.",
     )
     flattened = [tau_expr[row, 0] for row in range(tau_expr.rows)]
     return _build_generated_function(bundle, spec, flattened, config)
@@ -409,7 +422,7 @@ def generate_base_regressor_cpp_function(
     function_name: str = "fill_H_bip_base",
     config: CodegenConfig = CodegenConfig(language="cpp"),
 ) -> CGeneratedCode:
-    """Generate a ROS2-friendly C++ kernel class for H(q, qd, qdd, qds)."""
+    """Generate a ROS2-friendly C++ kernel class for H(q, qd, qdd, stribeck_parameters)."""
     return generate_base_regressor_c_function(bundle, function_name=function_name, config=config)
 
 

@@ -37,18 +37,22 @@ def build_base_identification_pipeline(
     robot: RobotModel,
     selection_dataset: IdentificationDataset,
     *,
-    selection_qds: np.ndarray | None = None,
+    selection_stribeck_parameters: np.ndarray | None = None,
     symbolic_options: SymbolicBuildOptions = SymbolicBuildOptions(),
     selection_strategy: BaseSelectionStrategy = BaseSelectionStrategy(),
 ) -> BaseIdentificationPipeline:
     """Assemble a symbolic regressor, numeric base selection and compiled evaluators."""
     standard_bundle = build_standard_regressor(robot, symbolic_options)
     standard_evaluator = build_standard_regressor_evaluator(standard_bundle)
-    if standard_evaluator.qds_size > 0 and selection_qds is None:
-        raise ValueError("selection_qds must be provided because the selected symbolic model depends on qds.")
+    if standard_evaluator.stribeck_parameter_size > 0 and selection_stribeck_parameters is None:
+        raise ValueError("selection_stribeck_parameters must be provided because the selected symbolic model depends on it.")
 
     standard_param_count = len(standard_bundle.context.standard_params)
-    regressor_matrix, _ = stack_regression_problem(selection_dataset, standard_evaluator, qds=selection_qds)
+    regressor_matrix, _ = stack_regression_problem(
+        selection_dataset,
+        standard_evaluator,
+        stribeck_parameters=selection_stribeck_parameters,
+    )
     inertial_regressor = regressor_matrix[:, :standard_param_count]
     base_metadata = select_base_parameters(
         inertial_regressor,

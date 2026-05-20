@@ -16,8 +16,8 @@ def save_prediction_plot(
     *,
     dataset: IdentificationDataset,
     evaluator,
-    theta_lin: np.ndarray,
-    qds: np.ndarray,
+    linear_parameters: np.ndarray,
+    stribeck_parameters: np.ndarray,
     stride: int,
 ) -> None:
     """Save measured/predicted torque plots for one identification result."""
@@ -28,7 +28,13 @@ def save_prediction_plot(
     indices = np.arange(0, dataset.sample_count, max(stride, 1))
     predictions = np.vstack(
         [
-            evaluator.predict_tau(dataset.q[index], dataset.qd[index], dataset.qdd[index], theta_lin, qds=qds)
+            evaluator.predict_tau(
+                dataset.q[index],
+                dataset.qd[index],
+                dataset.qdd[index],
+                linear_parameters,
+                stribeck_parameters=stribeck_parameters,
+            )
             for index in indices
         ]
     )

@@ -69,7 +69,7 @@ class SymbolicBasicsTests(unittest.TestCase):
         self.assertEqual(tuple(str(symbol) for symbol in context.q), ("q1", "q2"))
         self.assertEqual(tuple(str(symbol) for symbol in context.qd), ("qd1", "qd2"))
         self.assertEqual(tuple(str(symbol) for symbol in context.qdd), ("qdd1", "qdd2"))
-        self.assertEqual(tuple(str(symbol) for symbol in context.qds), ("qds1", "qds2"))
+        self.assertEqual(tuple(str(symbol) for symbol in context.stribeck_parameters), ("stribeck1", "stribeck2"))
         self.assertEqual(tuple(str(symbol) for symbol in context.standard_params[:4]), ("I1xx", "I1xy", "I1xz", "I1yy"))
         self.assertEqual(tuple(str(symbol) for symbol in context.joint_dynamics_params), ("fv1", "fv2", "fc1", "fc2", "fd1", "fd2"))
 
@@ -82,7 +82,7 @@ class SymbolicBasicsTests(unittest.TestCase):
         self.assertEqual(regressor[0, 0], context.qd[0])
         self.assertEqual(regressor[1, 1], context.qd[1])
         self.assertEqual(regressor[0, 2], sp.sign(context.qd[0]))
-        self.assertEqual(regressor[1, 5], sp.sign(context.qd[1]) * sp.exp(-sp.Abs(context.qd[1] / context.qds[1])))
+        self.assertEqual(regressor[1, 5], sp.sign(context.qd[1]) * sp.exp(-sp.Abs(context.qd[1] / context.stribeck_parameters[1])))
 
     def test_joint_dynamics_torque(self) -> None:
         robot = self._load_robot()
@@ -121,8 +121,8 @@ class SymbolicBasicsTests(unittest.TestCase):
 
     def test_inverse_dynamics_exposes_program(self) -> None:
         robot = self._load_robot()
-        context = build_symbolic_context(robot, SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_qds=False))
-        bundle = build_inverse_dynamics(robot, context, SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_qds=False))
+        context = build_symbolic_context(robot, SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_stribeck_parameters=False))
+        bundle = build_inverse_dynamics(robot, context, SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_stribeck_parameters=False))
         self.assertGreaterEqual(len(bundle.program.blocks), robot.dof + 1)
         self.assertGreater(bundle.program.output_count, 0)
         self.assertIsNone(bundle._tau_total)
@@ -133,7 +133,7 @@ class SymbolicBasicsTests(unittest.TestCase):
         robot = self._load_robot()
         bundle = build_standard_regressor(
             robot,
-            SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_qds=False),
+            SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_stribeck_parameters=False),
         )
         self.assertIsNone(bundle.inverse_dynamics._tau_total)
         self.assertIsNone(bundle._regressor)
@@ -144,7 +144,7 @@ class SymbolicBasicsTests(unittest.TestCase):
         robot = self._load_robot()
         bundle = build_standard_regressor(
             robot,
-            SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv", "fc"), include_qds=True),
+            SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv", "fc"), include_stribeck_parameters=True),
         )
         linear_parameters = set(bundle.context.linear_params)
         self.assertFalse(set().union(*(expr.free_symbols for expr in bundle.regressor_program)) & linear_parameters)

@@ -14,7 +14,7 @@ from .dataset import IdentificationDataset
 class LinearLeastSquaresResult:
     """Solution and diagnostics for one linear parameter solve."""
 
-    theta_lin: np.ndarray
+    linear_parameters: np.ndarray
     residual_vector: np.ndarray
     rmse: np.ndarray
     objective: float
@@ -31,7 +31,7 @@ def _iter_sample_blocks(sample_count: int, chunk_size: int) -> range:
 def stack_regression_problem(
     dataset: IdentificationDataset,
     evaluator: LinearRegressorEvaluator,
-    qds: np.ndarray | None = None,
+    stribeck_parameters: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Stack H and tau across all samples into one linear least-squares problem."""
     rows: list[np.ndarray] = []
@@ -41,7 +41,7 @@ def stack_regression_problem(
                 dataset.q[sample_index],
                 dataset.qd[sample_index],
                 dataset.qdd[sample_index],
-                qds=qds,
+                stribeck_parameters=stribeck_parameters,
             )
         )
     regressor_matrix = np.vstack(rows)
@@ -52,10 +52,14 @@ def stack_regression_problem(
 def solve_linear_parameters(
     dataset: IdentificationDataset,
     evaluator: LinearRegressorEvaluator,
-    qds: np.ndarray | None = None,
+    stribeck_parameters: np.ndarray | None = None,
 ) -> LinearLeastSquaresResult:
-    """Solve theta* = argmin ||W theta - T||_2 with optional sample weights."""
-    regressor_matrix, target_vector = stack_regression_problem(dataset, evaluator, qds=qds)
+    """Solve linear_parameters* = argmin ||W p - T||_2 with optional sample weights."""
+    regressor_matrix, target_vector = stack_regression_problem(
+        dataset,
+        evaluator,
+        stribeck_parameters=stribeck_parameters,
+    )
 
     if dataset.sample_weights is not None:
         weighted_matrix = dataset.sample_weights[:, None] * regressor_matrix
@@ -64,12 +68,12 @@ def solve_linear_parameters(
         weighted_matrix = regressor_matrix
         weighted_target = target_vector
 
-    theta_lin, *_ = np.linalg.lstsq(weighted_matrix, weighted_target, rcond=None)
-    residual_vector = target_vector - regressor_matrix @ theta_lin
+    linear_parameters, *_ = np.linalg.lstsq(weighted_matrix, weighted_target, rcond=None)
+    residual_vector = target_vector - regressor_matrix @ linear_parameters
     rmse = np.sqrt(np.mean(residual_vector.reshape(dataset.sample_count, dataset.dof) ** 2, axis=0))
-    objective = float(np.linalg.norm(weighted_target - weighted_matrix @ theta_lin))
+    objective = float(np.linalg.norm(weighted_target - weighted_matrix @ linear_parameters))
     return LinearLeastSquaresResult(
-        theta_lin=theta_lin,
+        linear_parameters=linear_parameters,
         residual_vector=residual_vector,
         rmse=rmse,
         objective=objective,
@@ -81,11 +85,11 @@ def solve_linear_parameters(
 def solve_linear_parameters_streaming(
     dataset: IdentificationDataset,
     evaluator: LinearRegressorEvaluator,
-    qds: np.ndarray | None = None,
+    stribeck_parameters: np.ndarray | None = None,
     *,
     chunk_size: int = 256,
 ) -> LinearLeastSquaresResult:
-    """Solve theta* by accumulating normal equations over sample chunks."""
+    """Solve linear parameters by accumulating normal equations over sample chunks."""
     param_count = len(evaluator.linear_parameter_names)
     ata = np.zeros((param_count, param_count), dtype=float)
     atb = np.zeros((param_count,), dtype=float)
@@ -105,7 +109,7 @@ def solve_linear_parameters_streaming(
                 ),
             ),
             evaluator,
-            qds=qds,
+            stribeck_parameters=stribeck_parameters,
         )
         if dataset.sample_weights is not None:
             weights = dataset.sample_weights[start * dataset.dof : stop * dataset.dof]
@@ -117,7 +121,7 @@ def solve_linear_parameters_streaming(
         ata += weighted_matrix.T @ weighted_matrix
         atb += weighted_matrix.T @ weighted_target
 
-    theta_lin, *_ = np.linalg.lstsq(ata, atb, rcond=None)
+    linear_parameters, *_ = np.linalg.lstsq(ata, atb, rcond=None)
 
     residuals: list[np.ndarray] = []
     squared_error_sum = np.zeros((dataset.dof,), dtype=float)
@@ -136,9 +140,9 @@ def solve_linear_parameters_streaming(
                 ),
             ),
             evaluator,
-            qds=qds,
+            stribeck_parameters=stribeck_parameters,
         )
-        residual_chunk = target_chunk - regressor_chunk @ theta_lin
+        residual_chunk = target_chunk - regressor_chunk @ linear_parameters
         residuals.append(residual_chunk)
         squared_error_sum += np.sum(residual_chunk.reshape(stop - start, dataset.dof) ** 2, axis=0)
 
@@ -150,7 +154,7 @@ def solve_linear_parameters_streaming(
     rmse = np.sqrt(squared_error_sum / dataset.sample_count)
     objective = float(np.linalg.norm(weighted_residual))
     return LinearLeastSquaresResult(
-        theta_lin=theta_lin,
+        linear_parameters=linear_parameters,
         residual_vector=residual_vector,
         rmse=rmse,
         objective=objective,

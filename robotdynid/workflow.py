@@ -60,7 +60,7 @@ class IdentificationWorkflowConfig:
     selection_random_seed: int = 42
     selection_velocity_scale: float = 0.5
     selection_acceleration_scale: float = 0.5
-    qds_init: np.ndarray | None = None
+    stribeck_parameter_init: np.ndarray | None = None
     max_iterations: int = 8
     chunk_size: int | None = None
     output_dir: str | Path | None = None
@@ -139,12 +139,12 @@ def _resolve_selection_dataset(
     raise ValueError("selection_source must be either 'model' or 'data'.")
 
 
-def _resolve_qds_init(raw: np.ndarray | None, dof: int) -> np.ndarray:
+def _resolve_stribeck_parameter_init(raw: np.ndarray | None, dof: int) -> np.ndarray:
     if raw is None:
         return np.full((dof,), 0.2, dtype=float)
     values = np.asarray(raw, dtype=float).reshape(-1)
     if values.shape[0] != dof:
-        raise ValueError(f"qds_init must have length {dof}, got {values.shape[0]}.")
+        raise ValueError(f"stribeck_parameter_init must have length {dof}, got {values.shape[0]}.")
     return values
 
 
@@ -183,13 +183,16 @@ def _export_codegen_artifacts(
     *,
     base_metadata,
     output_dir: Path,
-    fixed_qds: np.ndarray,
+    fixed_stribeck_parameters: np.ndarray,
 ) -> dict[str, list[str]]:
     if not config.export_code:
         return {}
 
     symbolic_robot = load_robot_from_urdf(config.urdf_path)
-    symbolic_options = SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv", "fc", "fd"), include_qds=True)
+    symbolic_options = SymbolicBuildOptions(
+        enabled_joint_dynamics_groups=("fv", "fc", "fd"),
+        include_stribeck_parameters=True,
+    )
     standard_bundle = build_standard_regressor(symbolic_robot, symbolic_options, simplify=False)
     base_bundle = build_base_regressor(standard_bundle, base_metadata)
 
@@ -206,7 +209,7 @@ def _export_codegen_artifacts(
             namespace=config.codegen_namespace,
             class_name=config.codegen_class_name,
             helper_block_size=config.codegen_helper_block_size,
-            fixed_qds=tuple(float(value) for value in fixed_qds),
+            fixed_stribeck_parameters=tuple(float(value) for value in fixed_stribeck_parameters),
         )
         language_dir = output_dir / config.codegen_output_subdir / language
         if language.lower() == "cpp":
@@ -250,12 +253,15 @@ def run_identification_workflow(config: IdentificationWorkflowConfig) -> dict[st
         enabled_joint_dynamics_groups=("fv", "fc", "fd"),
         base_metadata=base_metadata,
     )
-    qds_init = _resolve_qds_init(config.qds_init, identify_evaluator.qds_size)
+    stribeck_parameter_init = _resolve_stribeck_parameter_init(
+        config.stribeck_parameter_init,
+        identify_evaluator.stribeck_parameter_size,
+    )
     result = identify_with_stribeck(
         dataset,
         identify_evaluator,
         AlternatingIdentifyConfig(
-            qds_init=qds_init,
+            stribeck_parameter_init=stribeck_parameter_init,
             max_iterations=config.max_iterations,
             chunk_size=config.chunk_size,
             optimizer_kwargs=config.optimizer_kwargs or {"ftol": 1e-9, "xtol": 1e-9, "gtol": 1e-9},
@@ -283,15 +289,15 @@ def run_identification_workflow(config: IdentificationWorkflowConfig) -> dict[st
                 output_dir,
                 dataset=dataset,
                 evaluator=identify_evaluator,
-                theta_lin=result.theta_lin,
-                qds=result.qds,
+                linear_parameters=result.linear_parameters,
+                stribeck_parameters=result.stribeck_parameters,
                 stride=config.prediction_plot_stride,
             )
         codegen_outputs = _export_codegen_artifacts(
             config,
             base_metadata=base_metadata,
             output_dir=output_dir,
-            fixed_qds=result.qds,
+            fixed_stribeck_parameters=result.stribeck_parameters,
         )
         if codegen_outputs:
             payload["codegen_outputs"] = codegen_outputs

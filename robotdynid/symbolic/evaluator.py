@@ -21,7 +21,7 @@ class LinearRegressorEvaluator:
     q_size: int
     qd_size: int
     qdd_size: int
-    qds_size: int
+    stribeck_parameter_size: int
     linear_parameter_names: tuple[str, ...]
     _regressor_func: Callable[..., np.ndarray]
 
@@ -30,14 +30,18 @@ class LinearRegressorEvaluator:
         q: np.ndarray,
         qd: np.ndarray,
         qdd: np.ndarray,
-        qds: np.ndarray | None = None,
+        stribeck_parameters: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Evaluate the regressor matrix H(q, qd, qdd, qds)."""
+        """Evaluate the regressor matrix H(q, qd, qdd, stribeck_parameters)."""
         q_arr = _as_vector(q, self.q_size, "q")
         qd_arr = _as_vector(qd, self.qd_size, "qd")
         qdd_arr = _as_vector(qdd, self.qdd_size, "qdd")
-        qds_arr = _as_optional_vector(qds, self.qds_size, "qds")
-        values = (*q_arr, *qd_arr, *qdd_arr, *qds_arr)
+        stribeck_arr = _as_optional_vector(
+            stribeck_parameters,
+            self.stribeck_parameter_size,
+            "stribeck_parameters",
+        )
+        values = (*q_arr, *qd_arr, *qdd_arr, *stribeck_arr)
         regressor = np.asarray(self._regressor_func(*values), dtype=float)
         return regressor.reshape(self.dof, len(self.linear_parameter_names))
 
@@ -46,13 +50,13 @@ class LinearRegressorEvaluator:
         q: np.ndarray,
         qd: np.ndarray,
         qdd: np.ndarray,
-        theta_lin: np.ndarray,
-        qds: np.ndarray | None = None,
+        linear_parameters: np.ndarray,
+        stribeck_parameters: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Evaluate tau = H * theta_lin for one state."""
-        regressor = self.evaluate_regressor(q, qd, qdd, qds=qds)
-        theta = _as_vector(theta_lin, len(self.linear_parameter_names), "theta_lin")
-        return regressor @ theta
+        """Evaluate tau = H * linear_parameters for one state."""
+        regressor = self.evaluate_regressor(q, qd, qdd, stribeck_parameters=stribeck_parameters)
+        parameters = _as_vector(linear_parameters, len(self.linear_parameter_names), "linear_parameters")
+        return regressor @ parameters
 
 
 def _as_vector(values: np.ndarray, size: int, name: str) -> np.ndarray:
@@ -71,7 +75,7 @@ def _as_optional_vector(values: np.ndarray | None, size: int, name: str) -> np.n
 
 
 def _build_lambdify_inputs(context: SymbolicContext) -> tuple[sp.Symbol, ...]:
-    return context.q + context.qd + context.qdd + context.qds
+    return context.q + context.qd + context.qdd + context.stribeck_parameters
 
 
 def build_regressor_evaluator(
@@ -87,7 +91,7 @@ def build_regressor_evaluator(
         q_size=len(context.q),
         qd_size=len(context.qd),
         qdd_size=len(context.qdd),
-        qds_size=len(context.qds),
+        stribeck_parameter_size=len(context.stribeck_parameters),
         linear_parameter_names=linear_parameter_names,
         _regressor_func=regressor_func,
     )

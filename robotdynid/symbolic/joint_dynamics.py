@@ -15,7 +15,7 @@ def build_joint_dynamics_regressor(
     dof = len(context.qd)
     columns: list[sp.Matrix] = []
     groups = options.enabled_joint_dynamics_groups
-    qds = context.qds
+    stribeck_parameters = context.stribeck_parameters
 
     if "ia" in groups:
         for index in range(dof):
@@ -36,12 +36,12 @@ def build_joint_dynamics_regressor(
             columns.append(column)
 
     if "fd" in groups:
-        if len(qds) != dof:
-            raise ValueError("qds symbols must be present when the fd group is enabled.")
+        if len(stribeck_parameters) != dof:
+            raise ValueError("Stribeck parameter symbols must be present when the fd group is enabled.")
         for index in range(dof):
             column = sp.zeros(dof, 1)
             velocity = context.qd[index]
-            column[index, 0] = sp.sign(velocity) * sp.exp(-sp.Abs(velocity / qds[index]))
+            column[index, 0] = sp.sign(velocity) * sp.exp(-sp.Abs(velocity / stribeck_parameters[index]))
             columns.append(column)
 
     if "fo" in groups:

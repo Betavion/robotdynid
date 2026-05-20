@@ -63,7 +63,7 @@ class SymbolicBaseProjectionTests(unittest.TestCase):
         robot = self._load_robot()
         bundle = build_standard_regressor(
             robot,
-            SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_qds=False),
+            SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_stribeck_parameters=False),
         )
         theta_std = extract_standard_parameter_values(robot)
 

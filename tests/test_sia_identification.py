@@ -74,7 +74,7 @@ class IdentificationWorkflowTests(unittest.TestCase):
                     save_prediction_plot=True,
                     export_code=True,
                     codegen_languages=("c", "cpp"),
-                    qds_init=[0.2, 0.2],
+                    stribeck_parameter_init=[0.2, 0.2],
                     max_iterations=2,
                     chunk_size=2,
                 )
@@ -82,8 +82,8 @@ class IdentificationWorkflowTests(unittest.TestCase):
 
             self.assertEqual(payload["sample_count"], 4)
             self.assertTrue((root / "out" / "identify_result.json").exists())
-            self.assertTrue((root / "out" / "theta_lin.csv").exists())
-            self.assertTrue((root / "out" / "qds_star.csv").exists())
+            self.assertTrue((root / "out" / "identified_linear_parameters.csv").exists())
+            self.assertTrue((root / "out" / "identified_stribeck_parameters.csv").exists())
             self.assertTrue((root / "out" / "base_metadata.json").exists())
             self.assertTrue((root / "out" / "prediction.png").exists())
             self.assertIn("codegen_outputs", payload)
@@ -91,7 +91,10 @@ class IdentificationWorkflowTests(unittest.TestCase):
             self.assertIn("codegen_outputs", saved_payload)
             self.assertTrue((root / "out" / "codegen" / "c" / "fill_H_bip_base.c").exists())
             self.assertTrue((root / "out" / "codegen" / "cpp" / "predict_tau.cpp").exists())
-            self.assertNotIn("qds[", (root / "out" / "codegen" / "c" / "predict_tau.c").read_text(encoding="utf-8"))
+            self.assertNotIn(
+                "stribeck_parameters[",
+                (root / "out" / "codegen" / "c" / "predict_tau.c").read_text(encoding="utf-8"),
+            )
 
     def test_default_output_dir_uses_timestamped_runs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -116,7 +119,7 @@ class IdentificationWorkflowTests(unittest.TestCase):
                         save_prediction_plot=False,
                         export_code=True,
                         codegen_languages=("c",),
-                        qds_init=[0.2, 0.2],
+                        stribeck_parameter_init=[0.2, 0.2],
                         max_iterations=1,
                     )
                 )
@@ -149,7 +152,7 @@ class IdentificationWorkflowTests(unittest.TestCase):
                     output_dir=root / "out",
                     save_outputs=False,
                     export_code=True,
-                    qds_init=[0.2, 0.2],
+                    stribeck_parameter_init=[0.2, 0.2],
                     max_iterations=1,
                 )
             )
