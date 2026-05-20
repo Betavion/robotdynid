@@ -11,7 +11,14 @@ from robotdynid.symbolic import (
     build_base_regressor,
     build_standard_regressor,
 )
-from robotdynid.codegen import generate_base_regressor_c_function, generate_prediction_c_function
+from robotdynid.codegen import (
+    CodegenConfig,
+    export_c_code_artifacts,
+    generate_base_regressor_c_function,
+    generate_base_regressor_cpp_function,
+    generate_prediction_c_function,
+    generate_prediction_cpp_function,
+)
 
 
 URDF_TEXT = """\
@@ -73,16 +80,18 @@ class CodegenTests(unittest.TestCase):
     def test_generate_base_regressor_c_function(self) -> None:
         bundle = self._build_base_bundle()
         generated = generate_base_regressor_c_function(bundle)
-        self.assertIn("void fill_H_bip_base", generated.source)
-        self.assertIn("double *H", generated.source)
-        self.assertIn("H[0] =", generated.source)
+        self.assertEqual(generated.language, "c")
+        self.assertIn("void fill_H_bip_base", generated.definition)
+        self.assertIn("double *H", generated.definition)
+        self.assertIn("H[0] =", generated.definition)
 
     def test_generate_prediction_c_function(self) -> None:
         bundle = self._build_base_bundle()
         generated = generate_prediction_c_function(bundle)
-        self.assertIn("void predict_tau", generated.source)
-        self.assertIn("const double *theta_lin", generated.source)
-        self.assertIn("tau[0] =", generated.source)
+        self.assertEqual(generated.language, "c")
+        self.assertIn("void predict_tau", generated.definition)
+        self.assertIn("const double *theta_lin", generated.definition)
+        self.assertIn("tau[0] =", generated.definition)
 
     def test_generate_prediction_c_function_single_parameter(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -130,4 +139,27 @@ class CodegenTests(unittest.TestCase):
         )
         bundle = build_base_regressor(standard_bundle, metadata)
         generated = generate_prediction_c_function(bundle)
-        self.assertIn("void predict_tau", generated.source)
+        self.assertIn("void predict_tau", generated.definition)
+
+    def test_generate_cpp_functions(self) -> None:
+        bundle = self._build_base_bundle()
+        config = CodegenConfig(language="cpp", helper_block_size=4, namespace="robotdynid::generated", class_name="SiaKernel")
+        generated_h = generate_base_regressor_cpp_function(bundle, config=config)
+        generated_tau = generate_prediction_cpp_function(bundle, config=config)
+        self.assertEqual(generated_h.language, "cpp")
+        self.assertIn("namespace robotdynid::generated", generated_h.declaration)
+        self.assertIn("class SiaKernel final", generated_h.declaration)
+        self.assertIn("kTemporaryCount", generated_h.declaration)
+        if "kTemporaryCount = 0" not in generated_h.declaration:
+            self.assertIn("ComputeBlock", generated_h.declaration)
+            self.assertIn("SiaKernel::ComputeBlock0", "\n".join(generated_h.helper_definitions))
+        self.assertIn("SiaKernel::PredictTau", generated_tau.definition)
+
+    def test_export_cpp_artifacts(self) -> None:
+        bundle = self._build_base_bundle()
+        generated = generate_base_regressor_cpp_function(bundle, config=CodegenConfig(language="cpp", helper_block_size=4))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifacts = export_c_code_artifacts(generated, bundle, tmpdir)
+            self.assertTrue(artifacts.source_path.name.endswith(".cpp"))
+            self.assertTrue(artifacts.header_path.name.endswith(".hpp"))
+            self.assertTrue(artifacts.metadata_path.exists())

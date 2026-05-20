@@ -72,6 +72,8 @@ class IdentificationWorkflowTests(unittest.TestCase):
                     position_offsets=(0.0, 0.0),
                     output_dir=root / "out",
                     save_prediction_plot=True,
+                    export_code=True,
+                    codegen_languages=("c", "cpp"),
                     qds_init=[0.2, 0.2],
                     max_iterations=2,
                     chunk_size=2,
@@ -84,3 +86,6 @@ class IdentificationWorkflowTests(unittest.TestCase):
             self.assertTrue((root / "out" / "qds_star.csv").exists())
             self.assertTrue((root / "out" / "base_metadata.json").exists())
             self.assertTrue((root / "out" / "prediction.png").exists())
+            self.assertIn("codegen_outputs", payload)
+            self.assertTrue((root / "out" / "codegen" / "c" / "fill_H_bip_base.c").exists())
+            self.assertTrue((root / "out" / "codegen" / "cpp" / "predict_tau.cpp").exists())

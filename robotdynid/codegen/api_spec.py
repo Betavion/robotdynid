@@ -1,9 +1,19 @@
-"""Small data structures for generated C code."""
+"""Small data structures for generated code artifacts."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class CodegenConfig:
+    """Configuration for C/C++ code generation."""
+
+    language: str = "c"
+    namespace: str = "robotdynid::generated"
+    class_name: str = "RegressorKernel"
+    helper_block_size: int = 64
 
 
 @dataclass(frozen=True)
@@ -18,15 +28,18 @@ class CFunctionSpec:
 
 @dataclass(frozen=True)
 class CGeneratedCode:
-    """C code generation result."""
+    """Generated function code in C or C++ form."""
 
+    language: str
     function_spec: CFunctionSpec
-    source: str
+    declaration: str
+    definition: str
+    helper_definitions: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class CArtifactPaths:
-    """Filesystem locations for generated C source, header and metadata."""
+    """Filesystem locations for generated source, header and metadata."""
 
     source_path: Path
     header_path: Path

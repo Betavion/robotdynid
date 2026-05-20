@@ -7,6 +7,14 @@ from pathlib import Path
 
 import numpy as np
 
+from .codegen import (
+    CodegenConfig,
+    export_c_code_artifacts,
+    generate_base_regressor_c_function,
+    generate_base_regressor_cpp_function,
+    generate_prediction_c_function,
+    generate_prediction_cpp_function,
+)
 from .identify import (
     AlternatingIdentifyConfig,
     CsvDatasetConfig,
@@ -26,6 +34,8 @@ from .numeric import (
     select_base_parameters,
 )
 from .reporting import build_result_payload, save_identification_artifacts, save_prediction_plot
+from .io import load_robot_from_urdf
+from .symbolic import SymbolicBuildOptions, build_base_regressor, build_standard_regressor
 
 
 @dataclass(frozen=True)
@@ -53,6 +63,12 @@ class IdentificationWorkflowConfig:
     save_prediction_plot: bool = True
     torque_weighting: str | None = "torque_std"
     optimizer_kwargs: dict[str, object] | None = None
+    export_code: bool = False
+    codegen_languages: tuple[str, ...] = ("c",)
+    codegen_output_subdir: str = "codegen"
+    codegen_helper_block_size: int = 64
+    codegen_namespace: str = "robotdynid::generated"
+    codegen_class_name: str = "RegressorKernel"
 
 
 def _resolve_dataset(config: IdentificationWorkflowConfig) -> IdentificationDataset:
@@ -137,6 +153,47 @@ def _resolve_csv_source(config: IdentificationWorkflowConfig) -> str | dict[str,
     return str(config.csv_path)
 
 
+def _export_codegen_artifacts(
+    config: IdentificationWorkflowConfig,
+    *,
+    base_metadata,
+) -> dict[str, list[str]]:
+    if config.output_dir is None or not config.export_code:
+        return {}
+
+    symbolic_robot = load_robot_from_urdf(config.urdf_path)
+    symbolic_options = SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv", "fc", "fd"), include_qds=True)
+    standard_bundle = build_standard_regressor(symbolic_robot, symbolic_options, simplify=False)
+    base_bundle = build_base_regressor(standard_bundle, base_metadata)
+
+    outputs: dict[str, list[str]] = {}
+    for language in config.codegen_languages:
+        codegen_config = CodegenConfig(
+            language=language,
+            namespace=config.codegen_namespace,
+            class_name=config.codegen_class_name,
+            helper_block_size=config.codegen_helper_block_size,
+        )
+        language_dir = Path(config.output_dir) / config.codegen_output_subdir / language
+        if language.lower() == "cpp":
+            base_generated = generate_base_regressor_cpp_function(base_bundle, config=codegen_config)
+            prediction_generated = generate_prediction_cpp_function(base_bundle, config=codegen_config)
+        else:
+            base_generated = generate_base_regressor_c_function(base_bundle, config=codegen_config)
+            prediction_generated = generate_prediction_c_function(base_bundle, config=codegen_config)
+        base_paths = export_c_code_artifacts(base_generated, base_bundle, language_dir)
+        prediction_paths = export_c_code_artifacts(prediction_generated, base_bundle, language_dir)
+        outputs[language] = [
+            str(base_paths.source_path),
+            str(base_paths.header_path),
+            str(base_paths.metadata_path),
+            str(prediction_paths.source_path),
+            str(prediction_paths.header_path),
+            str(prediction_paths.metadata_path),
+        ]
+    return outputs
+
+
 def run_identification_workflow(config: IdentificationWorkflowConfig) -> dict[str, object]:
     """Run the complete identification workflow for a serial robot."""
     dataset = _resolve_dataset(config)
@@ -195,5 +252,8 @@ def run_identification_workflow(config: IdentificationWorkflowConfig) -> dict[st
                 qds=result.qds,
                 stride=config.prediction_plot_stride,
             )
+        codegen_outputs = _export_codegen_artifacts(config, base_metadata=base_metadata)
+        if codegen_outputs:
+            payload["codegen_outputs"] = codegen_outputs
 
     return payload
