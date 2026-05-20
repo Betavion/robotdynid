@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,7 +70,6 @@ class IdentificationWorkflowTests(unittest.TestCase):
                     max_samples=4,
                     selection_samples=4,
                     selection_source="model",
-                    position_offsets=(0.0, 0.0),
                     output_dir=root / "out",
                     save_prediction_plot=True,
                     export_code=True,
@@ -87,5 +87,72 @@ class IdentificationWorkflowTests(unittest.TestCase):
             self.assertTrue((root / "out" / "base_metadata.json").exists())
             self.assertTrue((root / "out" / "prediction.png").exists())
             self.assertIn("codegen_outputs", payload)
+            saved_payload = json.loads((root / "out" / "identify_result.json").read_text(encoding="utf-8"))
+            self.assertIn("codegen_outputs", saved_payload)
             self.assertTrue((root / "out" / "codegen" / "c" / "fill_H_bip_base.c").exists())
             self.assertTrue((root / "out" / "codegen" / "cpp" / "predict_tau.cpp").exists())
+            self.assertNotIn("qds[", (root / "out" / "codegen" / "c" / "predict_tau.c").read_text(encoding="utf-8"))
+
+    def test_default_output_dir_uses_timestamped_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            urdf_path = root / "robot.urdf"
+            csv_path = root / "data.csv"
+            urdf_path.write_text(URDF_TEXT, encoding="utf-8")
+            csv_path.write_text(CSV_TEXT, encoding="utf-8")
+
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                payload = run_identification_workflow(
+                    IdentificationWorkflowConfig(
+                        urdf_path=urdf_path,
+                        csv_path=csv_path,
+                        dof=2,
+                        stride=1,
+                        max_samples=4,
+                        selection_samples=4,
+                        selection_source="model",
+                        save_prediction_plot=False,
+                        export_code=True,
+                        codegen_languages=("c",),
+                        qds_init=[0.2, 0.2],
+                        max_iterations=1,
+                    )
+                )
+            finally:
+                os.chdir(previous_cwd)
+
+            output_dir = Path(str(payload["output_dir"]))
+            self.assertEqual(output_dir.parts[0], "runs")
+            self.assertRegex(output_dir.name, r"^\d{8}_\d{6}(?:_\d{2})?$")
+            self.assertTrue((root / output_dir / "identify_result.json").exists())
+            self.assertTrue((root / output_dir / "codegen" / "c" / "predict_tau.c").exists())
+
+    def test_save_outputs_false_keeps_run_in_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            urdf_path = root / "robot.urdf"
+            csv_path = root / "data.csv"
+            urdf_path.write_text(URDF_TEXT, encoding="utf-8")
+            csv_path.write_text(CSV_TEXT, encoding="utf-8")
+
+            payload = run_identification_workflow(
+                IdentificationWorkflowConfig(
+                    urdf_path=urdf_path,
+                    csv_path=csv_path,
+                    dof=2,
+                    stride=1,
+                    max_samples=4,
+                    selection_samples=4,
+                    selection_source="model",
+                    output_dir=root / "out",
+                    save_outputs=False,
+                    export_code=True,
+                    qds_init=[0.2, 0.2],
+                    max_iterations=1,
+                )
+            )
+
+            self.assertNotIn("output_dir", payload)
+            self.assertFalse((root / "out").exists())

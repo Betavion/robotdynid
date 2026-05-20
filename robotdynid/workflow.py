@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -40,7 +41,12 @@ from .symbolic import SymbolicBuildOptions, build_base_regressor, build_standard
 
 @dataclass(frozen=True)
 class IdentificationWorkflowConfig:
-    """Configuration for a complete URDF + motion-data identification run."""
+    """Configuration for a complete URDF + motion-data identification run.
+
+    By default artifacts are written to runs/<timestamp>. Set save_outputs to
+    False to keep the run in memory. An empty output_dir is accepted as a CLI
+    compatibility alias for save_outputs=False.
+    """
 
     urdf_path: str | Path
     dof: int
@@ -54,11 +60,11 @@ class IdentificationWorkflowConfig:
     selection_random_seed: int = 42
     selection_velocity_scale: float = 0.5
     selection_acceleration_scale: float = 0.5
-    position_offsets: tuple[float, ...] | None = None
     qds_init: np.ndarray | None = None
     max_iterations: int = 8
     chunk_size: int | None = None
     output_dir: str | Path | None = None
+    save_outputs: bool = True
     prediction_plot_stride: int = 50
     save_prediction_plot: bool = True
     torque_weighting: str | None = "torque_std"
@@ -80,7 +86,6 @@ def _resolve_dataset(config: IdentificationWorkflowConfig) -> IdentificationData
             config.torque_csv_path,
             MotionTorqueCsvDatasetConfig(
                 dof=config.dof,
-                position_offsets=config.position_offsets,
                 torque_weighting=config.torque_weighting,
                 stride=config.stride,
                 max_samples=config.max_samples,
@@ -92,7 +97,6 @@ def _resolve_dataset(config: IdentificationWorkflowConfig) -> IdentificationData
         config.csv_path,
         CsvDatasetConfig(
             dof=config.dof,
-            position_offsets=config.position_offsets,
             torque_weighting=config.torque_weighting,
             stride=config.stride,
             max_samples=config.max_samples,
@@ -153,12 +157,35 @@ def _resolve_csv_source(config: IdentificationWorkflowConfig) -> str | dict[str,
     return str(config.csv_path)
 
 
+def _timestamped_run_dir(root: str | Path = "runs") -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = Path(root) / timestamp
+    candidate = base
+    suffix = 1
+    while candidate.exists():
+        candidate = Path(f"{base}_{suffix:02d}")
+        suffix += 1
+    return candidate
+
+
+def _resolve_output_dir(config: IdentificationWorkflowConfig) -> Path | None:
+    if not config.save_outputs:
+        return None
+    if config.output_dir is None:
+        return _timestamped_run_dir()
+    if str(config.output_dir) == "":
+        return None
+    return Path(config.output_dir)
+
+
 def _export_codegen_artifacts(
     config: IdentificationWorkflowConfig,
     *,
     base_metadata,
+    output_dir: Path,
+    fixed_qds: np.ndarray,
 ) -> dict[str, list[str]]:
-    if config.output_dir is None or not config.export_code:
+    if not config.export_code:
         return {}
 
     symbolic_robot = load_robot_from_urdf(config.urdf_path)
@@ -168,19 +195,26 @@ def _export_codegen_artifacts(
 
     outputs: dict[str, list[str]] = {}
     for language in config.codegen_languages:
-        codegen_config = CodegenConfig(
+        base_codegen_config = CodegenConfig(
             language=language,
             namespace=config.codegen_namespace,
             class_name=config.codegen_class_name,
             helper_block_size=config.codegen_helper_block_size,
         )
-        language_dir = Path(config.output_dir) / config.codegen_output_subdir / language
+        prediction_codegen_config = CodegenConfig(
+            language=language,
+            namespace=config.codegen_namespace,
+            class_name=config.codegen_class_name,
+            helper_block_size=config.codegen_helper_block_size,
+            fixed_qds=tuple(float(value) for value in fixed_qds),
+        )
+        language_dir = output_dir / config.codegen_output_subdir / language
         if language.lower() == "cpp":
-            base_generated = generate_base_regressor_cpp_function(base_bundle, config=codegen_config)
-            prediction_generated = generate_prediction_cpp_function(base_bundle, config=codegen_config)
+            base_generated = generate_base_regressor_cpp_function(base_bundle, config=base_codegen_config)
+            prediction_generated = generate_prediction_cpp_function(base_bundle, config=prediction_codegen_config)
         else:
-            base_generated = generate_base_regressor_c_function(base_bundle, config=codegen_config)
-            prediction_generated = generate_prediction_c_function(base_bundle, config=codegen_config)
+            base_generated = generate_base_regressor_c_function(base_bundle, config=base_codegen_config)
+            prediction_generated = generate_prediction_c_function(base_bundle, config=prediction_codegen_config)
         base_paths = export_c_code_artifacts(base_generated, base_bundle, language_dir)
         prediction_paths = export_c_code_artifacts(prediction_generated, base_bundle, language_dir)
         outputs[language] = [
@@ -196,6 +230,7 @@ def _export_codegen_artifacts(
 
 def run_identification_workflow(config: IdentificationWorkflowConfig) -> dict[str, object]:
     """Run the complete identification workflow for a serial robot."""
+    output_dir = _resolve_output_dir(config)
     dataset = _resolve_dataset(config)
     pin_bundle = build_pinocchio_model(config.urdf_path)
     standard_evaluator = build_pinocchio_regressor_evaluator(
@@ -236,24 +271,30 @@ def run_identification_workflow(config: IdentificationWorkflowConfig) -> dict[st
         stride=config.stride,
         max_samples=config.max_samples,
         chunk_size=config.chunk_size,
-        used_legacy_mdh_offsets=False,
         base_metadata=base_metadata,
         identification_result=result,
     )
 
-    if config.output_dir is not None:
-        save_identification_artifacts(config.output_dir, payload, base_metadata)
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        payload["output_dir"] = str(output_dir)
         if config.save_prediction_plot:
             save_prediction_plot(
-                config.output_dir,
+                output_dir,
                 dataset=dataset,
                 evaluator=identify_evaluator,
                 theta_lin=result.theta_lin,
                 qds=result.qds,
                 stride=config.prediction_plot_stride,
             )
-        codegen_outputs = _export_codegen_artifacts(config, base_metadata=base_metadata)
+        codegen_outputs = _export_codegen_artifacts(
+            config,
+            base_metadata=base_metadata,
+            output_dir=output_dir,
+            fixed_qds=result.qds,
+        )
         if codegen_outputs:
             payload["codegen_outputs"] = codegen_outputs
+        save_identification_artifacts(output_dir, payload, base_metadata)
 
     return payload

@@ -67,6 +67,20 @@ def _cpp_method_name(spec: CFunctionSpec) -> str:
     return "FillBaseRegressor" if spec.output_name == "H" else "PredictTau"
 
 
+def _helper_parameters(spec: CFunctionSpec) -> str:
+    parameters = ["double *tmp", "const double *q", "const double *qd", "const double *qdd", "const double *qds"]
+    if "theta_lin" in spec.argument_names:
+        parameters.append("const double *theta_lin")
+    return ", ".join(parameters)
+
+
+def _helper_arguments(spec: CFunctionSpec) -> str:
+    arguments = ["tmp", "q", "qd", "qdd", "qds"]
+    if "theta_lin" in spec.argument_names:
+        arguments.append("theta_lin")
+    return ", ".join(arguments)
+
+
 def _cpp_declaration(spec: CFunctionSpec, config: CodegenConfig) -> str:
     method_name = _cpp_method_name(spec)
     if spec.output_name == "H":
@@ -91,13 +105,18 @@ def _emit_cpp_class_header(
     dof: int,
     columns: int,
     temporary_count: int,
+    program_helper_count: int,
     helper_count: int,
 ) -> str:
     namespace_open = f"namespace {config.namespace} {{"
     namespace_close = "}  // namespace " + config.namespace
     method_decl = _cpp_declaration(spec, config) + ";"
+    program_helper_lines = [
+        f"  static void ComputeProgramBlock{idx}({_helper_parameters(spec)});"
+        for idx in range(program_helper_count)
+    ]
     helper_lines = [
-        f"  static void ComputeBlock{idx}(double *tmp, const double *q, const double *qd, const double *qdd, const double *qds, const double *theta_lin);"
+        f"  static void ComputeBlock{idx}({_helper_parameters(spec)});"
         for idx in range(helper_count)
     ]
     return "\n".join(
@@ -114,6 +133,7 @@ def _emit_cpp_class_header(
             f"  static constexpr std::size_t kTemporaryCount = {temporary_count};",
             f"  {method_decl}",
             "private:",
+            *program_helper_lines,
             *helper_lines,
             "};",
             namespace_close,
@@ -151,21 +171,44 @@ def _temporary_blocks(
     return blocks
 
 
+def _emit_temporary_assignments(
+    assignments: tuple[tuple[sp.Symbol, sp.Expr], ...],
+    bundle: BaseRegressorBundle,
+    temp_index: dict[str, int],
+) -> list[str]:
+    return [
+        f"tmp[{temp_index[str(symbol)]}] = {_ccode(expr, bundle, temp_index)};"
+        for symbol, expr in assignments
+    ]
+
+
 def _emit_c_helper(
-    function_name: str,
+    spec: CFunctionSpec,
     block_index: int,
     block: tuple[tuple[sp.Symbol, sp.Expr], ...],
     bundle: BaseRegressorBundle,
     temp_index: dict[str, int],
 ) -> str:
-    helper_name = f"{function_name}_block_{block_index}"
-    lines = [
-        f"static inline void {helper_name}(double *tmp, const double *q, const double *qd, const double *qdd, const double *qds, const double *theta_lin)"
-    ]
-    body = []
-    for symbol, expr in block:
-        body.append(f"tmp[{temp_index[str(symbol)]}] = {_ccode(expr, bundle, temp_index)};")
-    return _emit_c_function(lines[0], body)
+    helper_name = f"{spec.name}_block_{block_index}"
+    signature = f"static inline void {helper_name}({_helper_parameters(spec)})"
+    return _emit_c_function(signature, _emit_temporary_assignments(block, bundle, temp_index))
+
+
+def _emit_program_c_helper(
+    spec: CFunctionSpec,
+    block_index: int,
+    block,
+    bundle: BaseRegressorBundle,
+    temp_index: dict[str, int],
+) -> str:
+    helper_name = f"{spec.name}_program_block_{block_index}"
+    signature = f"static inline void {helper_name}({_helper_parameters(spec)})"
+    body = _emit_temporary_assignments(
+        tuple((temp.symbol, temp.expr) for temp in block.temporaries),
+        bundle,
+        temp_index,
+    )
+    return _emit_c_function(signature, body)
 
 
 def _emit_cpp_helper(
@@ -178,9 +221,28 @@ def _emit_cpp_helper(
 ) -> str:
     signature = (
         f"void {config.namespace}::{config.class_name}::ComputeBlock{block_index}"
-        "(double *tmp, const double *q, const double *qd, const double *qdd, const double *qds, const double *theta_lin)"
+        f"({_helper_parameters(spec)})"
     )
-    body = [f"tmp[{temp_index[str(symbol)]}] = {_ccode(expr, bundle, temp_index)};" for symbol, expr in block]
+    return _emit_c_function(signature, _emit_temporary_assignments(block, bundle, temp_index))
+
+
+def _emit_program_cpp_helper(
+    spec: CFunctionSpec,
+    config: CodegenConfig,
+    block_index: int,
+    block,
+    bundle: BaseRegressorBundle,
+    temp_index: dict[str, int],
+) -> str:
+    signature = (
+        f"void {config.namespace}::{config.class_name}::ComputeProgramBlock{block_index}"
+        f"({_helper_parameters(spec)})"
+    )
+    body = _emit_temporary_assignments(
+        tuple((temp.symbol, temp.expr) for temp in block.temporaries),
+        bundle,
+        temp_index,
+    )
     return _emit_c_function(signature, body)
 
 
@@ -190,19 +252,43 @@ def _emit_main_body(
     bundle: BaseRegressorBundle,
     flattened_outputs: list[sp.Expr],
     temp_index: dict[str, int],
+    program_helper_count: int,
     helper_count: int,
+    language: str,
 ) -> list[str]:
     lines: list[str] = []
     if temp_index:
         lines.append(f"double tmp[{len(temp_index)}] = {{0.0}};")
-        for block_index in range(helper_count):
-            if config.language == "cpp":
-                lines.append(f"{config.class_name}::ComputeBlock{block_index}(tmp, q, qd, qdd, qds, theta_lin);")
+        helper_arguments = _helper_arguments(spec)
+        for block_index in range(program_helper_count):
+            if language == "cpp":
+                lines.append(f"{config.class_name}::ComputeProgramBlock{block_index}({helper_arguments});")
             else:
-                lines.append(f"{spec.name}_block_{block_index}(tmp, q, qd, qdd, qds, theta_lin);")
+                lines.append(f"{spec.name}_program_block_{block_index}({helper_arguments});")
+        for block_index in range(helper_count):
+            if language == "cpp":
+                lines.append(f"{config.class_name}::ComputeBlock{block_index}({helper_arguments});")
+            else:
+                lines.append(f"{spec.name}_block_{block_index}({helper_arguments});")
     for index, expr in enumerate(flattened_outputs):
         lines.append(f"{spec.output_name}[{index}] = {_ccode(expr, bundle, temp_index)};")
     return lines
+
+
+def _apply_fixed_qds(
+    expressions: list[sp.Expr],
+    bundle: BaseRegressorBundle,
+    config: CodegenConfig,
+) -> list[sp.Expr]:
+    if config.fixed_qds is None:
+        return expressions
+    if len(config.fixed_qds) != len(bundle.context.qds):
+        raise ValueError(f"fixed_qds must have length {len(bundle.context.qds)}.")
+    substitutions = {
+        symbol: sp.Float(value)
+        for symbol, value in zip(bundle.context.qds, config.fixed_qds)
+    }
+    return [sp.sympify(expr).xreplace(substitutions) for expr in expressions]
 
 
 def _build_generated_function(
@@ -212,11 +298,25 @@ def _build_generated_function(
     config: CodegenConfig,
 ) -> CGeneratedCode:
     language = _validate_language(config.language)
-    cse_output = apply_cse(output_expressions)
-    temp_index = {str(symbol): idx for idx, (symbol, _) in enumerate(cse_output.temporaries)}
+    output_expressions = _apply_fixed_qds(output_expressions, bundle, config)
+    cse_output = apply_cse(output_expressions, symbol_prefix="aux")
+    program_inputs = [expr for _, expr in cse_output.temporaries] + list(cse_output.reduced_expressions)
+    program_blocks = list(enumerate(bundle.program.required_blocks(program_inputs)))
+    program_temporaries = [temp for _, block in program_blocks for temp in block.temporaries]
+    program_temp_index = {str(temp.symbol): idx for idx, temp in enumerate(program_temporaries)}
+
+    cse_temp_index = {
+        str(symbol): len(program_temporaries) + idx
+        for idx, (symbol, _) in enumerate(cse_output.temporaries)
+    }
+    temp_index = program_temp_index | cse_temp_index
     blocks = _temporary_blocks(cse_output.temporaries, helper_block_size=config.helper_block_size)
 
     if language == "cpp":
+        program_helper_defs = tuple(
+            _emit_program_cpp_helper(spec, config, block_index, block, bundle, temp_index)
+            for block_index, block in program_blocks
+        )
         helper_defs = tuple(
             _emit_cpp_helper(spec, config, block_index, block, bundle, temp_index)
             for block_index, block in blocks
@@ -224,9 +324,10 @@ def _build_generated_function(
         declaration = _emit_cpp_class_header(
             spec,
             config,
-            dof=bundle.regressor.rows if spec.output_name == "H" else len(output_expressions),
-            columns=bundle.regressor.cols,
-            temporary_count=len(cse_output.temporaries),
+            dof=bundle.regressor_program.rows if spec.output_name == "H" else len(output_expressions),
+            columns=bundle.regressor_program.cols,
+            temporary_count=len(program_temporaries) + len(cse_output.temporaries),
+            program_helper_count=len(program_blocks),
             helper_count=len(blocks),
         )
         main_signature = (
@@ -234,8 +335,12 @@ def _build_generated_function(
             + _cpp_declaration(spec, config)[len(f"static void {_cpp_method_name(spec)}") :]
         )
     else:
+        program_helper_defs = tuple(
+            _emit_program_c_helper(spec, block_index, block, bundle, temp_index)
+            for block_index, block in program_blocks
+        )
         helper_defs = tuple(
-            _emit_c_helper(spec.name, block_index, block, bundle, temp_index)
+            _emit_c_helper(spec, block_index, block, bundle, temp_index)
             for block_index, block in blocks
         )
         declaration = _emit_c_header(spec, language, spec.name)
@@ -247,7 +352,9 @@ def _build_generated_function(
         bundle,
         list(cse_output.reduced_expressions),
         temp_index,
+        len(program_blocks),
         len(blocks),
+        language,
     )
     definition = _emit_c_function(main_signature, body_lines)
     return CGeneratedCode(
@@ -255,7 +362,7 @@ def _build_generated_function(
         function_spec=spec,
         declaration=declaration,
         definition=definition,
-        helper_definitions=helper_defs,
+        helper_definitions=program_helper_defs + helper_defs,
     )
 
 
@@ -272,7 +379,7 @@ def generate_base_regressor_c_function(
         argument_names=("q", "qd", "qdd", "qds"),
         docstring="Fill the row-major base regressor H(q, qd, qdd, qds).",
     )
-    flattened = _flatten_row_major(bundle.regressor)
+    flattened = _flatten_row_major(bundle.regressor_program)
     return _build_generated_function(bundle, spec, flattened, config)
 
 
@@ -285,7 +392,7 @@ def generate_prediction_c_function(
     """Generate tau(q, qd, qdd, qds, theta_lin) directly from the base regressor."""
     linear_symbols = sp.symbols(" ".join(bundle.linear_parameter_names), real=True)
     linear_symbols = linear_symbols if isinstance(linear_symbols, tuple) else (linear_symbols,)
-    tau_expr = bundle.regressor * sp.Matrix(linear_symbols)
+    tau_expr = bundle.regressor_program * sp.Matrix(linear_symbols)
     spec = CFunctionSpec(
         name=function_name,
         output_name="tau",
@@ -334,6 +441,22 @@ def export_c_code_artifacts(
     source_lines: list[str] = []
     if generated.language == "cpp":
         source_lines.append(f'#include "{stem}{header_suffix}"')
+        source_lines.append("#include <cmath>")
+        source_lines.append("")
+        source_lines.extend(
+            [
+                "using std::cos;",
+                "using std::exp;",
+                "using std::fabs;",
+                "using std::pow;",
+                "using std::sin;",
+                "using std::sqrt;",
+            ]
+        )
+        source_lines.append("")
+    else:
+        source_lines.append(f'#include "{stem}{header_suffix}"')
+        source_lines.append("#include <math.h>")
         source_lines.append("")
     source_lines.extend(generated.helper_definitions)
     if generated.helper_definitions:
@@ -347,8 +470,8 @@ def export_c_code_artifacts(
         "function_name": generated.function_spec.name,
         "output_name": generated.function_spec.output_name,
         "argument_names": list(generated.function_spec.argument_names),
-        "dof": bundle.regressor.rows if generated.function_spec.output_name == "H" else bundle.regressor.rows,
-        "column_count": bundle.regressor.cols,
+        "dof": bundle.regressor_program.rows,
+        "column_count": bundle.regressor_program.cols,
         "base_parameter_names": list(bundle.base_parameter_names),
         "linear_parameter_names": list(bundle.linear_parameter_names),
         "helper_count": len(generated.helper_definitions),

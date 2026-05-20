@@ -14,6 +14,7 @@ class CodegenConfig:
     namespace: str = "robotdynid::generated"
     class_name: str = "RegressorKernel"
     helper_block_size: int = 64
+    fixed_qds: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)

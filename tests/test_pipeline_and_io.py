@@ -97,11 +97,11 @@ class PipelineAndIoTests(unittest.TestCase):
             )
             dataset = load_identification_dataset_from_csv(
                 csv_path,
-                CsvDatasetConfig(dof=2, position_offsets=(0.1, -0.2)),
+                CsvDatasetConfig(dof=2),
             )
         self.assertEqual(dataset.q.shape, (2, 2))
-        self.assertAlmostEqual(dataset.q[0, 0], 0.1)
-        self.assertAlmostEqual(dataset.q[0, 1], -0.1)
+        self.assertAlmostEqual(dataset.q[0, 0], 0.0)
+        self.assertAlmostEqual(dataset.q[0, 1], 0.1)
         self.assertEqual(dataset.sample_weights.shape, (4,))
 
     def test_build_pipeline_and_export_codegen(self) -> None:

@@ -21,7 +21,6 @@ def build_result_payload(
     stride: int,
     max_samples: int | None,
     chunk_size: int | None,
-    used_legacy_mdh_offsets: bool,
     base_metadata: BaseParamMetadata,
     identification_result: IdentificationResult,
 ) -> dict[str, object]:
@@ -38,7 +37,6 @@ def build_result_payload(
         "objective_history": list(identification_result.objective_history),
         "rmse_history": [rmse.tolist() for rmse in identification_result.rmse_history],
         "linear_parameter_names": list(identification_result.linear_parameter_names),
-        "used_legacy_mdh_offsets": used_legacy_mdh_offsets,
         "stride": stride,
         "max_samples": max_samples,
         "chunk_size": chunk_size,

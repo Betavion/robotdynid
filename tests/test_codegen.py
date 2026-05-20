@@ -80,10 +80,12 @@ class CodegenTests(unittest.TestCase):
     def test_generate_base_regressor_c_function(self) -> None:
         bundle = self._build_base_bundle()
         generated = generate_base_regressor_c_function(bundle)
+        generated_source = "\n".join(generated.helper_definitions + (generated.definition,))
         self.assertEqual(generated.language, "c")
         self.assertIn("void fill_H_bip_base", generated.definition)
         self.assertIn("double *H", generated.definition)
         self.assertIn("H[0] =", generated.definition)
+        self.assertNotIn("theta_lin", generated_source)
 
     def test_generate_prediction_c_function(self) -> None:
         bundle = self._build_base_bundle()
@@ -151,9 +153,25 @@ class CodegenTests(unittest.TestCase):
         self.assertIn("class SiaKernel final", generated_h.declaration)
         self.assertIn("kTemporaryCount", generated_h.declaration)
         if "kTemporaryCount = 0" not in generated_h.declaration:
-            self.assertIn("ComputeBlock", generated_h.declaration)
-            self.assertIn("SiaKernel::ComputeBlock0", "\n".join(generated_h.helper_definitions))
+            self.assertTrue(
+                "ComputeProgramBlock" in generated_h.declaration or "ComputeBlock" in generated_h.declaration
+            )
+            helper_source = "\n".join(generated_h.helper_definitions)
+            self.assertTrue(
+                "SiaKernel::ComputeProgramBlock0" in helper_source or "SiaKernel::ComputeBlock0" in helper_source
+            )
+            self.assertNotIn("theta_lin", helper_source + generated_h.definition)
         self.assertIn("SiaKernel::PredictTau", generated_tau.definition)
+
+    def test_fixed_qds_specializes_generated_expressions(self) -> None:
+        bundle = self._build_base_bundle()
+        generated = generate_prediction_c_function(
+            bundle,
+            config=CodegenConfig(language="c", fixed_qds=(0.25, 0.5)),
+        )
+        generated_source = "\n".join(generated.helper_definitions + (generated.definition,))
+        self.assertNotIn("qds[0]", generated_source)
+        self.assertNotIn("qds[1]", generated_source)
 
     def test_export_cpp_artifacts(self) -> None:
         bundle = self._build_base_bundle()

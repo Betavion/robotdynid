@@ -21,7 +21,6 @@ class CsvDatasetConfig:
     velocity_prefix: str = "vel"
     acceleration_prefix: str = "acc"
     torque_prefix: str = "torque"
-    position_offsets: tuple[float, ...] | None = None
     torque_weighting: str | None = "torque_std"
     stride: int = 1
     max_samples: int | None = None
@@ -36,7 +35,6 @@ class MotionTorqueCsvDatasetConfig:
     position_template: str = "joint{index}_position"
     velocity_template: str = "joint{index}_velocity"
     torque_template: str = "joint{index}_measure"
-    position_offsets: tuple[float, ...] | None = None
     torque_weighting: str | None = "torque_std"
     stride: int = 1
     max_samples: int | None = None
@@ -49,15 +47,6 @@ def _column_names(prefix: str, dof: int) -> list[str]:
 
 def _template_names(template: str, dof: int) -> list[str]:
     return [template.format(index=index) for index in range(1, dof + 1)]
-
-
-def _apply_position_offsets(q: np.ndarray, offsets: tuple[float, ...] | None, dof: int) -> np.ndarray:
-    if offsets is None:
-        return q
-    offset_array = np.asarray(offsets, dtype=float).reshape(1, -1)
-    if offset_array.shape[1] != dof:
-        raise ValueError(f"position_offsets must contain {dof} values.")
-    return q + offset_array
 
 
 def _weights_from_mode(mode: str | None, tau: np.ndarray) -> np.ndarray | None:
@@ -102,7 +91,7 @@ def load_identification_dataset_from_csv(
     tau = dataframe[_column_names(config.torque_prefix, config.dof)].to_numpy(dtype=float)
 
     return IdentificationDataset(
-        q=_apply_position_offsets(q, config.position_offsets, config.dof),
+        q=q,
         qd=qd,
         qdd=qdd,
         tau=tau,
@@ -144,7 +133,7 @@ def load_identification_dataset_from_motion_and_torque_csv(
     tau = torque[_template_names(config.torque_template, config.dof)].to_numpy(dtype=float)
 
     return IdentificationDataset(
-        q=_apply_position_offsets(q, config.position_offsets, config.dof),
+        q=q,
         qd=qd,
         qdd=qdd,
         tau=tau,

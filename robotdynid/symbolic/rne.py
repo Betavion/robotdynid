@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import sympy as sp
 
 from robotdynid.core.robot_model import RobotModel
+from .program import SymbolicBlock, SymbolicProgram, SymbolicProgramBuilder
 from .joint_dynamics import build_joint_dynamics_torque
 from .spatial_math import (
     axis_angle_rotation,
@@ -22,9 +23,26 @@ from .symbols import SymbolicBuildOptions, SymbolicContext
 class InverseDynamicsBundle:
     """Symbolic inverse dynamics and reusable intermediate expressions."""
 
-    tau_inertial: sp.Matrix
+    tau_inertial_program: sp.Matrix
+    tau_total_program: sp.Matrix
     tau_joint_dynamics: sp.Matrix
-    tau_total: sp.Matrix
+    program: SymbolicProgram
+    _tau_inertial: sp.Matrix | None = field(default=None, repr=False, compare=False)
+    _tau_total: sp.Matrix | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def tau_inertial(self) -> sp.Matrix:
+        """Expanded inertial torque, resolved lazily for compatibility."""
+        if self._tau_inertial is None:
+            object.__setattr__(self, "_tau_inertial", self.program.resolve_matrix(self.tau_inertial_program))
+        return self._tau_inertial
+
+    @property
+    def tau_total(self) -> sp.Matrix:
+        """Expanded total torque, resolved lazily for compatibility."""
+        if self._tau_total is None:
+            object.__setattr__(self, "_tau_total", self.program.resolve_matrix(self.tau_total_program))
+        return self._tau_total
 
 
 def _symbolic_link_inertia(context: SymbolicContext, link_index: int) -> sp.Matrix:
@@ -49,11 +67,11 @@ def _joint_spatial_transform(joint, q_value: sp.Expr) -> sp.Matrix:
     axis = joint.axis
 
     if joint.joint_type in ("revolute", "continuous"):
-        rotation = sp.simplify(rotation0 * axis_angle_rotation(axis, q_value))
+        rotation = rotation0 * axis_angle_rotation(axis, q_value)
         translation = translation0
     elif joint.joint_type == "prismatic":
         rotation = rotation0
-        translation = sp.simplify(translation0 + rotation0 * axis * q_value)
+        translation = translation0 + rotation0 * axis * q_value
     else:
         raise ValueError(f"Unsupported motion joint type: {joint.joint_type}")
 
@@ -94,24 +112,32 @@ def build_inverse_dynamics(
 
     a_parent = gravity
     v_parent = sp.zeros(6, 1)
+    program_builder = SymbolicProgramBuilder(symbol_prefix="k")
 
     for index, joint in enumerate(robot.joints):
-        transform = _joint_spatial_transform(joint, context.q[index])
-        xup[index] = motion_transform_from_homogeneous(transform)
+        block = program_builder.begin_block(f"joint_{index + 1}_forward")
+        transform = block.hoist_matrix(_joint_spatial_transform(joint, context.q[index]), prefix="t")
+        xup[index] = block.hoist_matrix(motion_transform_from_homogeneous(transform), prefix="x")
         subspaces[index] = _joint_motion_subspace(joint)
         inertias[index] = _symbolic_link_inertia(context, index)
 
-        v_joint = subspaces[index] * context.qd[index]
-        velocities[index] = xup[index] * v_parent + v_joint
-        accelerations[index] = (
+        v_joint = block.hoist_matrix(subspaces[index] * context.qd[index], prefix="vj")
+        velocities[index] = block.hoist_matrix(xup[index] * v_parent + v_joint, prefix="v")
+        velocity_cross = block.hoist_matrix(motion_cross_matrix(velocities[index]), prefix="crm")
+        accelerations[index] = block.hoist_matrix(
             xup[index] * a_parent
             + subspaces[index] * context.qdd[index]
-            + motion_cross_matrix(velocities[index]) * v_joint
+            + velocity_cross * v_joint,
+            prefix="a",
         )
+        force_cross = block.hoist_matrix(force_cross_matrix(velocities[index]), prefix="crf")
+        inertia_acceleration = block.hoist_matrix(inertias[index] * accelerations[index], prefix="ia")
+        inertia_velocity = block.hoist_matrix(inertias[index] * velocities[index], prefix="iv")
         forces[index] = (
-            inertias[index] * accelerations[index]
-            + force_cross_matrix(velocities[index]) * inertias[index] * velocities[index]
+            inertia_acceleration
+            + force_cross * inertia_velocity
         )
+        program_builder.add_block(block.build())
 
         v_parent = velocities[index]
         a_parent = accelerations[index]
@@ -121,11 +147,27 @@ def build_inverse_dynamics(
         tau_inertial[index] = (subspaces[index].T * forces[index])[0]
         if index > 0:
             forces[index - 1] = forces[index - 1] + xup[index].T * forces[index]
+        program_builder.add_block(
+            SymbolicBlock(
+                name=f"joint_{index + 1}_backward",
+                temporaries=tuple(),
+                outputs=(tau_inertial[index],),
+            )
+        )
 
-    tau_inertial_matrix = sp.Matrix(tau_inertial)
+    tau_inertial_program = sp.Matrix(tau_inertial)
     tau_joint_dynamics = build_joint_dynamics_torque(context, options)
+    tau_total_program = tau_inertial_program + tau_joint_dynamics
+    output_block = SymbolicBlock(
+        name="tau_output",
+        temporaries=tuple(),
+        outputs=tuple(tau_inertial_program) + tuple(tau_joint_dynamics) + tuple(tau_total_program),
+    )
+    program_builder.add_block(output_block)
+    program = program_builder.build()
     return InverseDynamicsBundle(
-        tau_inertial=tau_inertial_matrix,
+        tau_inertial_program=tau_inertial_program,
+        tau_total_program=tau_total_program,
         tau_joint_dynamics=tau_joint_dynamics,
-        tau_total=tau_inertial_matrix + tau_joint_dynamics,
+        program=program,
     )

@@ -50,13 +50,13 @@ def motion_transform_from_homogeneous(transform: sp.Matrix) -> sp.Matrix:
 def axis_angle_rotation(axis: sp.Matrix, angle: sp.Expr) -> sp.Matrix:
     """Rodrigues rotation formula for a unit URDF axis."""
     axis_vec = sp.Matrix(axis)
-    norm_sq = sp.simplify((axis_vec.T * axis_vec)[0])
+    norm_sq = (axis_vec.T * axis_vec)[0]
     if norm_sq == 0:
         raise ValueError("Joint axis must be non-zero.")
     unit_axis = axis_vec if norm_sq == 1 else axis_vec / sp.sqrt(norm_sq)
     axis_x = skew3(unit_axis)
     identity = sp.eye(3)
-    return sp.simplify(
+    return (
         sp.cos(angle) * identity
         + (1 - sp.cos(angle)) * (unit_axis * unit_axis.T)
         + sp.sin(angle) * axis_x

@@ -8,6 +8,7 @@ from .evaluator import (
     build_standard_regressor_evaluator,
 )
 from .joint_dynamics import build_joint_dynamics_regressor, build_joint_dynamics_torque
+from .program import SymbolicBlock, SymbolicProgram, SymbolicTemporary
 from .regressor import SymbolicRegressorBundle, build_standard_regressor
 from .rne import InverseDynamicsBundle, build_inverse_dynamics
 from .simplify import simplify_matrix_entries, simplify_scalar
@@ -30,6 +31,9 @@ __all__ = [
     "build_standard_regressor",
     "build_standard_regressor_evaluator",
     "build_symbolic_context",
+    "SymbolicBlock",
+    "SymbolicProgram",
+    "SymbolicTemporary",
     "simplify_matrix_entries",
     "simplify_scalar",
 ]

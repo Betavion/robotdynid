@@ -8,12 +8,15 @@ import sympy as sp
 
 from robotdynid import load_robot_from_urdf
 from robotdynid.symbolic import (
+    build_inverse_dynamics,
     SymbolicBuildOptions,
     build_joint_dynamics_regressor,
     build_joint_dynamics_torque,
+    build_standard_regressor,
     build_symbolic_context,
     simplify_matrix_entries,
 )
+from robotdynid.symbolic.program import SymbolicProgramBuilder
 
 
 URDF_TEXT = """\
@@ -98,3 +101,50 @@ class SymbolicBasicsTests(unittest.TestCase):
         simplified = simplify_matrix_entries(matrix, trig=True)
         self.assertEqual(simplified[0, 0], 1)
         self.assertEqual(simplified[0, 1], q + 1)
+
+    def test_symbolic_program_jacobian_matches_resolved_matrix(self) -> None:
+        x, y, z = sp.symbols("x y z", real=True)
+        builder = SymbolicProgramBuilder(symbol_prefix="t")
+        block = builder.begin_block("synthetic")
+        t0 = block.hoist_expr(x * y + sp.sin(z))
+        t1 = block.hoist_expr(t0**2 + y)
+        outputs = sp.Matrix([t1 + x * sp.cos(t0), t0 * y])
+        builder.add_block(block.build(tuple(outputs)))
+        program = builder.build()
+
+        variables = sp.Matrix([x, y])
+        actual = program.jacobian_matrix(outputs, variables)
+        expected = program.resolve_matrix(outputs).jacobian(variables)
+
+        difference = (program.resolve_matrix(actual) - expected).applyfunc(sp.simplify)
+        self.assertEqual(difference, sp.zeros(2, 2))
+
+    def test_inverse_dynamics_exposes_program(self) -> None:
+        robot = self._load_robot()
+        context = build_symbolic_context(robot, SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_qds=False))
+        bundle = build_inverse_dynamics(robot, context, SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_qds=False))
+        self.assertGreaterEqual(len(bundle.program.blocks), robot.dof + 1)
+        self.assertGreater(bundle.program.output_count, 0)
+        self.assertIsNone(bundle._tau_total)
+        self.assertEqual(bundle.tau_total.shape, (robot.dof, 1))
+        self.assertIsNotNone(bundle._tau_total)
+
+    def test_standard_regressor_resolves_lazily(self) -> None:
+        robot = self._load_robot()
+        bundle = build_standard_regressor(
+            robot,
+            SymbolicBuildOptions(enabled_joint_dynamics_groups=tuple(), include_qds=False),
+        )
+        self.assertIsNone(bundle.inverse_dynamics._tau_total)
+        self.assertIsNone(bundle._regressor)
+        self.assertEqual(bundle.regressor_program.shape, bundle.regressor.shape)
+        self.assertIsNotNone(bundle._regressor)
+
+    def test_standard_regressor_program_eliminates_linear_parameters(self) -> None:
+        robot = self._load_robot()
+        bundle = build_standard_regressor(
+            robot,
+            SymbolicBuildOptions(enabled_joint_dynamics_groups=("fv", "fc"), include_qds=True),
+        )
+        linear_parameters = set(bundle.context.linear_params)
+        self.assertFalse(set().union(*(expr.free_symbols for expr in bundle.regressor_program)) & linear_parameters)
