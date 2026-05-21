@@ -34,6 +34,7 @@ class MotionTorqueCsvDatasetConfig:
     timestamp_column: str = "timestamp"
     position_template: str = "joint{index}_position"
     velocity_template: str = "joint{index}_velocity"
+    acceleration_template: str = "joint{index}_acceleration"
     torque_template: str = "joint{index}_measure"
     torque_weighting: str | None = "torque_std"
     stride: int = 1
@@ -129,7 +130,11 @@ def load_identification_dataset_from_motion_and_torque_csv(
 
     q = motion[_template_names(config.position_template, config.dof)].to_numpy(dtype=float)
     qd = motion[_template_names(config.velocity_template, config.dof)].to_numpy(dtype=float)
-    qdd = estimate_acceleration(motion_ts, qd)
+    acceleration_columns = _template_names(config.acceleration_template, config.dof)
+    if all(column in motion.columns for column in acceleration_columns):
+        qdd = motion[acceleration_columns].to_numpy(dtype=float)
+    else:
+        qdd = estimate_acceleration(motion_ts, qd)
     tau = torque[_template_names(config.torque_template, config.dof)].to_numpy(dtype=float)
 
     return IdentificationDataset(

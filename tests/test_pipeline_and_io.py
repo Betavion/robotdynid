@@ -168,3 +168,35 @@ class PipelineAndIoTests(unittest.TestCase):
         self.assertEqual(dataset.q.shape, (3, 2))
         self.assertEqual(dataset.qdd.shape, (3, 2))
         self.assertEqual(dataset.tau.shape, (3, 2))
+
+    def test_motion_torque_csv_uses_acceleration_columns_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            motion_path = Path(tmpdir) / "motion.csv"
+            torque_path = Path(tmpdir) / "torque.csv"
+            motion_path.write_text(
+                "\n".join(
+                    [
+                        "timestamp,joint1_position,joint1_velocity,joint1_acceleration,joint2_position,joint2_velocity,joint2_acceleration",
+                        "1.0,0.0,1.0,10.0,0.1,-1.0,-10.0",
+                        "1.1,0.2,1.5,11.0,0.0,-0.5,-11.0",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            torque_path.write_text(
+                "\n".join(
+                    [
+                        "timestamp,joint1_measure,joint2_measure",
+                        "1.0,2.0,-2.0",
+                        "1.1,2.5,-1.5",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            dataset = load_identification_dataset_from_motion_and_torque_csv(
+                motion_path,
+                torque_path,
+                MotionTorqueCsvDatasetConfig(dof=2),
+            )
+
+        np.testing.assert_allclose(dataset.qdd, np.array([[10.0, -10.0], [11.0, -11.0]]))
