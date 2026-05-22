@@ -10,6 +10,8 @@ from robotdynid import load_robot_from_urdf
 from robotdynid.identify import (
     AlternatingIdentifyConfig,
     IdentificationDataset,
+    LinearRegularizationConfig,
+    RobustLossConfig,
     identify_with_stribeck,
     solve_linear_parameters,
     solve_linear_parameters_streaming,
@@ -55,6 +57,22 @@ URDF_TEXT = """\
   </link>
 </robot>
 """
+
+
+class _IdentityEvaluator:
+    linear_parameter_names = ("p1", "p2")
+
+    def evaluate_regressor(self, q, qd, qdd, stribeck_parameters=None):  # noqa: ANN001
+        del q, qd, qdd, stribeck_parameters
+        return np.eye(2)
+
+
+class _ScalarEvaluator:
+    linear_parameter_names = ("p1",)
+
+    def evaluate_regressor(self, q, qd, qdd, stribeck_parameters=None):  # noqa: ANN001
+        del q, qd, qdd, stribeck_parameters
+        return np.ones((1, 1), dtype=float)
 
 
 class IdentificationTests(unittest.TestCase):
@@ -115,6 +133,60 @@ class IdentificationTests(unittest.TestCase):
         dataset = IdentificationDataset(q=q, qd=qd, qdd=qdd, tau=tau)
         result = solve_linear_parameters(dataset, evaluator, stribeck_parameters=stribeck_parameters_true)
         np.testing.assert_allclose(result.linear_parameters, linear_parameters_true, atol=1e-10, rtol=1e-10)
+
+    def test_linear_regularization_shrinks_toward_prior(self) -> None:
+        q = qd = qdd = np.zeros((1, 2), dtype=float)
+        tau = np.array([[10.0, -10.0]], dtype=float)
+        dataset = IdentificationDataset(q=q, qd=qd, qdd=qdd, tau=tau)
+
+        regularized = solve_linear_parameters(
+            dataset,
+            _IdentityEvaluator(),
+            regularization=LinearRegularizationConfig(
+                strength=100.0,
+                prior=np.zeros((2,), dtype=float),
+                prior_std=np.ones((2,), dtype=float),
+            ),
+        )
+
+        np.testing.assert_allclose(regularized.linear_parameters, np.array([10.0 / 101.0, -10.0 / 101.0]), rtol=1e-10)
+        self.assertIsNotNone(regularized.regularization_residual)
+        self.assertLess(np.linalg.norm(regularized.linear_parameters), np.linalg.norm(tau.reshape(-1)))
+
+    def test_linear_regularization_accepts_full_covariance(self) -> None:
+        q = qd = qdd = np.zeros((1, 2), dtype=float)
+        tau = np.array([[2.0, 2.0]], dtype=float)
+        dataset = IdentificationDataset(q=q, qd=qd, qdd=qdd, tau=tau)
+
+        result = solve_linear_parameters(
+            dataset,
+            _IdentityEvaluator(),
+            regularization=LinearRegularizationConfig(
+                strength=1.0,
+                prior=np.zeros((2,), dtype=float),
+                covariance=np.diag([4.0, 1.0]),
+            ),
+        )
+
+        np.testing.assert_allclose(result.linear_parameters, np.array([1.6, 1.0]), rtol=1e-10)
+
+    def test_robust_linear_loss_reduces_outlier_bias(self) -> None:
+        sample_count = 20
+        q = qd = qdd = np.zeros((sample_count, 1), dtype=float)
+        tau = np.ones((sample_count, 1), dtype=float)
+        tau[-1, 0] = 100.0
+        dataset = IdentificationDataset(q=q, qd=qd, qdd=qdd, tau=tau)
+
+        ordinary = solve_linear_parameters(dataset, _ScalarEvaluator())
+        robust = solve_linear_parameters(
+            dataset,
+            _ScalarEvaluator(),
+            robust_loss=RobustLossConfig(loss="huber", f_scale=1.0, max_iterations=8),
+        )
+
+        self.assertGreater(abs(ordinary.linear_parameters[0] - 1.0), 4.0)
+        self.assertLess(abs(robust.linear_parameters[0] - 1.0), 0.2)
+        self.assertIsNotNone(robust.robust_weights)
 
     def test_identify_with_stribeck(self) -> None:
         robot = self._make_robot()

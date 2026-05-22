@@ -53,6 +53,12 @@ Typical entrypoints:
 - `robotdynid.codegen.generate_base_regressor_cpp_function`
 - `robotdynid.codegen.generate_prediction_cpp_function`
 
+## Theory
+
+The optimization model, covariance weighting, prior regularization, robust
+losses, and Stribeck alternating update are documented in
+`docs/identification_optimization_theory.md`.
+
 ## Development
 
 Run the test suite with:

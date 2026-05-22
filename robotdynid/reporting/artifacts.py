@@ -23,6 +23,7 @@ def build_result_payload(
     chunk_size: int | None,
     base_metadata: BaseParamMetadata,
     identification_result: IdentificationResult,
+    optimization: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build a serializable identification result payload."""
     return {
@@ -43,6 +44,7 @@ def build_result_payload(
         "stride": stride,
         "max_samples": max_samples,
         "chunk_size": chunk_size,
+        "optimization": optimization or {},
     }
 
 

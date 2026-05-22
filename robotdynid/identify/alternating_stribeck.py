@@ -9,7 +9,12 @@ from scipy import optimize
 
 from robotdynid.symbolic import LinearRegressorEvaluator
 from .dataset import IdentificationDataset
-from .linear_least_squares import solve_linear_parameters, solve_linear_parameters_streaming
+from .linear_least_squares import (
+    LinearRegularizationConfig,
+    RobustLossConfig,
+    solve_linear_parameters,
+    solve_linear_parameters_streaming,
+)
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,8 @@ class AlternatingIdentifyConfig:
     objective_tolerance: float = 1e-8
     stribeck_parameter_tolerance: float = 1e-6
     chunk_size: int | None = None
+    linear_regularization: LinearRegularizationConfig | None = None
+    robust_loss: RobustLossConfig | None = None
     optimizer_kwargs: dict[str, object] = field(default_factory=dict)
 
 
@@ -67,11 +74,27 @@ def identify_with_stribeck(
                 ev,
                 stribeck_parameters=params,
                 chunk_size=config.chunk_size,
+                regularization=config.linear_regularization,
+                robust_loss=config.robust_loss,
             )
         )
         if use_streaming
-        else (lambda ds, ev, params: solve_linear_parameters(ds, ev, stribeck_parameters=params))
+        else (
+            lambda ds, ev, params: solve_linear_parameters(
+                ds,
+                ev,
+                stribeck_parameters=params,
+                regularization=config.linear_regularization,
+                robust_loss=config.robust_loss,
+            )
+        )
     )
+
+    optimizer_kwargs = dict(config.optimizer_kwargs)
+    robust_loss = config.robust_loss
+    if robust_loss is not None and robust_loss.loss.strip().lower() != "linear":
+        optimizer_kwargs.setdefault("loss", robust_loss.loss.strip().lower())
+        optimizer_kwargs.setdefault("f_scale", robust_loss.f_scale)
 
     def weighted_residual(stribeck_candidate: np.ndarray) -> np.ndarray:
         candidate_result = solver(dataset, evaluator, stribeck_candidate)
@@ -89,7 +112,7 @@ def identify_with_stribeck(
             weighted_residual,
             stribeck_parameters,
             bounds=(lower, upper),
-            **config.optimizer_kwargs,
+            **optimizer_kwargs,
         )
         stribeck_next = optimization.x
 

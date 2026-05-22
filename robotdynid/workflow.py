@@ -20,7 +20,9 @@ from .identify import (
     AlternatingIdentifyConfig,
     CsvDatasetConfig,
     IdentificationDataset,
+    LinearRegularizationConfig,
     MotionTorqueCsvDatasetConfig,
+    RobustLossConfig,
     identify_with_stribeck,
     load_identification_dataset_from_csv,
     load_identification_dataset_from_motion_and_torque_csv,
@@ -31,6 +33,7 @@ from .numeric import (
     StateSamplingConfig,
     build_pinocchio_model,
     build_pinocchio_regressor_evaluator,
+    extract_inertia_dynamic_parameters,
     sample_model_state_dataset,
     select_base_parameters,
 )
@@ -68,6 +71,15 @@ class IdentificationWorkflowConfig:
     prediction_plot_stride: int = 50
     save_prediction_plot: bool = True
     torque_weighting: str | None = "torque_std"
+    measurement_torque_std: np.ndarray | None = None
+    linear_regularization_strength: float = 0.0
+    linear_regularization_prior_source: str = "zero"
+    linear_regularization_prior: np.ndarray | None = None
+    linear_regularization_prior_std: np.ndarray | None = None
+    linear_regularization_covariance: np.ndarray | None = None
+    robust_loss: str = "linear"
+    robust_f_scale: float = 1.0
+    robust_max_iterations: int = 5
     optimizer_kwargs: dict[str, object] | None = None
     export_code: bool = False
     codegen_languages: tuple[str, ...] = ("c",)
@@ -78,6 +90,8 @@ class IdentificationWorkflowConfig:
 
 
 def _resolve_dataset(config: IdentificationWorkflowConfig) -> IdentificationDataset:
+    torque_weighting_raw = "" if config.torque_weighting is None else str(config.torque_weighting).strip()
+    torque_weighting = None if torque_weighting_raw.lower() in {"", "none"} else torque_weighting_raw
     if config.motion_csv_path is not None or config.torque_csv_path is not None:
         if config.motion_csv_path is None or config.torque_csv_path is None:
             raise ValueError("motion_csv_path and torque_csv_path must be provided together.")
@@ -86,7 +100,7 @@ def _resolve_dataset(config: IdentificationWorkflowConfig) -> IdentificationData
             config.torque_csv_path,
             MotionTorqueCsvDatasetConfig(
                 dof=config.dof,
-                torque_weighting=config.torque_weighting,
+                torque_weighting=torque_weighting,
                 stride=config.stride,
                 max_samples=config.max_samples,
             ),
@@ -97,7 +111,7 @@ def _resolve_dataset(config: IdentificationWorkflowConfig) -> IdentificationData
         config.csv_path,
         CsvDatasetConfig(
             dof=config.dof,
-            torque_weighting=config.torque_weighting,
+            torque_weighting=torque_weighting,
             stride=config.stride,
             max_samples=config.max_samples,
         ),
@@ -146,6 +160,92 @@ def _resolve_stribeck_parameter_init(raw: np.ndarray | None, dof: int) -> np.nda
     if values.shape[0] != dof:
         raise ValueError(f"stribeck_parameter_init must have length {dof}, got {values.shape[0]}.")
     return values
+
+
+def _optional_vector(raw: np.ndarray | list[float] | tuple[float, ...] | None, *, name: str) -> np.ndarray | None:
+    if raw is None:
+        return None
+    values = np.asarray(raw, dtype=float).reshape(-1)
+    if values.size == 0:
+        return None
+    if not np.all(np.isfinite(values)):
+        raise ValueError(f"{name} must contain finite numeric values.")
+    return values
+
+
+def _apply_measurement_torque_std(
+    dataset: IdentificationDataset,
+    measurement_torque_std: np.ndarray | None,
+) -> IdentificationDataset:
+    std = _optional_vector(measurement_torque_std, name="measurement_torque_std")
+    if std is None:
+        return dataset
+    if std.shape[0] != dataset.dof:
+        raise ValueError(f"measurement_torque_std must have length {dataset.dof}, got {std.shape[0]}.")
+    if np.any(std <= 0.0):
+        raise ValueError("measurement_torque_std entries must be positive.")
+    covariance_weights = np.tile(1.0 / std, dataset.sample_count)
+    sample_weights = (
+        covariance_weights
+        if dataset.sample_weights is None
+        else np.asarray(dataset.sample_weights, dtype=float).reshape(-1) * covariance_weights
+    )
+    return IdentificationDataset(
+        q=dataset.q,
+        qd=dataset.qd,
+        qdd=dataset.qdd,
+        tau=dataset.tau,
+        sample_weights=sample_weights,
+    )
+
+
+def _base_inertial_prior_from_urdf(pin_bundle, base_metadata) -> np.ndarray:
+    standard_prior = extract_inertia_dynamic_parameters(pin_bundle, reorder_to_project=True)
+    if standard_prior.shape[0] != len(base_metadata.standard_param_names):
+        raise ValueError("URDF inertial prior size does not match the selected standard parameter set.")
+    return standard_prior[np.asarray(base_metadata.keep_indices, dtype=int)]
+
+
+def _resolve_regularization_config(
+    config: IdentificationWorkflowConfig,
+    *,
+    pin_bundle,
+    base_metadata,
+    identify_evaluator,
+) -> LinearRegularizationConfig | None:
+    strength = float(config.linear_regularization_strength)
+    if strength <= 0.0:
+        return None
+
+    parameter_count = len(identify_evaluator.linear_parameter_names)
+    explicit_prior = _optional_vector(config.linear_regularization_prior, name="linear_regularization_prior")
+    if explicit_prior is not None:
+        prior = explicit_prior
+    else:
+        source = config.linear_regularization_prior_source.strip().lower()
+        if source == "zero":
+            prior = np.zeros((parameter_count,), dtype=float)
+        elif source == "urdf":
+            inertial_prior = _base_inertial_prior_from_urdf(pin_bundle, base_metadata)
+            joint_dynamics_prior = np.zeros((parameter_count - inertial_prior.shape[0],), dtype=float)
+            prior = np.concatenate([inertial_prior, joint_dynamics_prior])
+        else:
+            raise ValueError("linear_regularization_prior_source must be 'zero' or 'urdf'.")
+    if prior.shape[0] != parameter_count:
+        raise ValueError(f"linear_regularization_prior must have length {parameter_count}, got {prior.shape[0]}.")
+
+    prior_std = _optional_vector(config.linear_regularization_prior_std, name="linear_regularization_prior_std")
+    covariance = (
+        None
+        if config.linear_regularization_covariance is None
+        else np.asarray(config.linear_regularization_covariance, dtype=float)
+    )
+    return LinearRegularizationConfig(
+        strength=strength,
+        prior=prior,
+        prior_std=prior_std,
+        covariance=covariance,
+    )
 
 
 def _resolve_csv_source(config: IdentificationWorkflowConfig) -> str | dict[str, str]:
@@ -234,7 +334,7 @@ def _export_codegen_artifacts(
 def run_identification_workflow(config: IdentificationWorkflowConfig) -> dict[str, object]:
     """Run the complete identification workflow for a serial robot."""
     output_dir = _resolve_output_dir(config)
-    dataset = _resolve_dataset(config)
+    dataset = _apply_measurement_torque_std(_resolve_dataset(config), config.measurement_torque_std)
     pin_bundle = build_pinocchio_model(config.urdf_path)
     standard_evaluator = build_pinocchio_regressor_evaluator(
         pin_bundle,
@@ -257,6 +357,17 @@ def run_identification_workflow(config: IdentificationWorkflowConfig) -> dict[st
         config.stribeck_parameter_init,
         identify_evaluator.stribeck_parameter_size,
     )
+    linear_regularization = _resolve_regularization_config(
+        config,
+        pin_bundle=pin_bundle,
+        base_metadata=base_metadata,
+        identify_evaluator=identify_evaluator,
+    )
+    robust_loss = RobustLossConfig(
+        loss=config.robust_loss,
+        f_scale=config.robust_f_scale,
+        max_iterations=config.robust_max_iterations,
+    )
     result = identify_with_stribeck(
         dataset,
         identify_evaluator,
@@ -264,6 +375,8 @@ def run_identification_workflow(config: IdentificationWorkflowConfig) -> dict[st
             stribeck_parameter_init=stribeck_parameter_init,
             max_iterations=config.max_iterations,
             chunk_size=config.chunk_size,
+            linear_regularization=linear_regularization,
+            robust_loss=robust_loss,
             optimizer_kwargs=config.optimizer_kwargs or {"ftol": 1e-9, "xtol": 1e-9, "gtol": 1e-9},
         ),
     )
@@ -279,6 +392,24 @@ def run_identification_workflow(config: IdentificationWorkflowConfig) -> dict[st
         chunk_size=config.chunk_size,
         base_metadata=base_metadata,
         identification_result=result,
+        optimization={
+            "torque_weighting": config.torque_weighting,
+            "measurement_torque_std": (
+                None
+                if config.measurement_torque_std is None
+                else np.asarray(config.measurement_torque_std, dtype=float).reshape(-1).tolist()
+            ),
+            "linear_regularization_strength": config.linear_regularization_strength,
+            "linear_regularization_prior_source": config.linear_regularization_prior_source,
+            "linear_regularization_prior_std": (
+                None
+                if config.linear_regularization_prior_std is None
+                else np.asarray(config.linear_regularization_prior_std, dtype=float).reshape(-1).tolist()
+            ),
+            "robust_loss": config.robust_loss,
+            "robust_f_scale": config.robust_f_scale,
+            "robust_max_iterations": config.robust_max_iterations,
+        },
     )
 
     if output_dir is not None:
