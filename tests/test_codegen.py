@@ -178,6 +178,59 @@ class CodegenTests(unittest.TestCase):
         self.assertNotIn("stribeck_parameters[0]", generated_source)
         self.assertNotIn("stribeck_parameters[1]", generated_source)
 
+    def test_fixed_stribeck_codegen_keeps_abs_velocity_decay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            urdf_path = Path(tmpdir) / "robot.urdf"
+            urdf_path.write_text(
+                """\
+<robot name="one_joint_stribeck_codegen">
+  <link name="base_link"/>
+  <joint name="joint1" type="revolute">
+    <parent link="base_link"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+  <link name="link1">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1"/>
+      <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/>
+    </inertial>
+  </link>
+</robot>
+""",
+                encoding="utf-8",
+            )
+            robot = load_robot_from_urdf(urdf_path)
+
+        standard_bundle = build_standard_regressor(
+            robot,
+            SymbolicBuildOptions(enabled_joint_dynamics_groups=("fd",), include_stribeck_parameters=True),
+        )
+        zero_subs = {
+            standard_bundle.context.q[0]: 0.2,
+            standard_bundle.context.qd[0]: 0.3,
+            standard_bundle.context.qdd[0]: 0.4,
+            standard_bundle.context.stribeck_parameters[0]: 0.5,
+        }
+        standard_count = len(standard_bundle.context.standard_params)
+        numeric_regressor = standard_bundle.regressor[:, :standard_count].subs(zero_subs)
+        metadata = select_base_parameters(
+            regressor_matrix=numeric_regressor,
+            standard_param_names=[str(symbol) for symbol in standard_bundle.context.standard_params],
+            strategy=BaseSelectionStrategy(scale_columns=True),
+        )
+        bundle = build_base_regressor(standard_bundle, metadata)
+        generated = generate_prediction_c_function(
+            bundle,
+            config=CodegenConfig(language="c", fixed_stribeck_parameters=(0.25,)),
+        )
+        generated_source = "\n".join(generated.helper_definitions + (generated.definition,))
+        self.assertIn("exp(-4.0*fabs(qd[0]))", generated_source)
+        self.assertNotIn("exp(4.0*qd[0])", generated_source)
+
     def test_export_cpp_artifacts(self) -> None:
         bundle = self._build_base_bundle()
         generated = generate_base_regressor_cpp_function(bundle, config=CodegenConfig(language="cpp", helper_block_size=4))

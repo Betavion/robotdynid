@@ -35,7 +35,10 @@ class SymbolicContext:
 def _named_symbols(prefix: str, count: int, *, positive: bool = False) -> tuple[sp.Symbol, ...]:
     if count < 0:
         raise ValueError("count must be non-negative.")
-    return tuple(sp.symbols(f"{prefix}1:{count + 1}", real=True, positive=positive))
+    assumptions = {"real": True}
+    if positive:
+        assumptions["positive"] = True
+    return tuple(sp.symbols(f"{prefix}1:{count + 1}", **assumptions))
 
 
 def build_symbolic_context(robot: RobotModel, options: SymbolicBuildOptions = SymbolicBuildOptions()) -> SymbolicContext:

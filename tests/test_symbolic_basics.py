@@ -69,7 +69,11 @@ class SymbolicBasicsTests(unittest.TestCase):
         self.assertEqual(tuple(str(symbol) for symbol in context.q), ("q1", "q2"))
         self.assertEqual(tuple(str(symbol) for symbol in context.qd), ("qd1", "qd2"))
         self.assertEqual(tuple(str(symbol) for symbol in context.qdd), ("qdd1", "qdd2"))
+        self.assertIsNone(context.q[0].is_positive)
+        self.assertIsNone(context.qd[0].is_positive)
+        self.assertIsNone(context.qdd[0].is_positive)
         self.assertEqual(tuple(str(symbol) for symbol in context.stribeck_parameters), ("stribeck1", "stribeck2"))
+        self.assertTrue(context.stribeck_parameters[0].is_positive)
         self.assertEqual(tuple(str(symbol) for symbol in context.standard_params[:4]), ("I1xx", "I1xy", "I1xz", "I1yy"))
         self.assertEqual(tuple(str(symbol) for symbol in context.joint_dynamics_params), ("fv1", "fv2", "fc1", "fc2", "fd1", "fd2"))
 
