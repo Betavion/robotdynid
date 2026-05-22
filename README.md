@@ -80,4 +80,4 @@ The `C++` backend avoids dynamic allocation in the generated runtime path and ca
 
 ## License
 
-MIT
+MPL-2.0
